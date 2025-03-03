@@ -15,10 +15,11 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #include <Shaders.hpp>
 
-#define PI 3.14159265358979323846
+#define M_PI 3.14159265358979323846
 
 // Use the better GPU ?
 #ifdef _WIN32
@@ -63,6 +64,7 @@ struct global_context
 
     bool        debug; 
     bool        wireframe;
+    bool        sphere;
 
     bool        firstMouse      = true;
     float       mouseLastX      = 400;
@@ -373,6 +375,103 @@ struct Coordinates
     }
 };
 Coordinates *world_axes;
+
+struct Grid
+{
+    GLuint VAO;
+    GLuint VBO;
+    GLuint shaderProgram;
+
+    Grid() 
+    {
+        // A large quad for the grid (XZ plane)
+        const float vertices[] = {
+            // Positions         // UVs
+            -50.0f, 0.0f, -50.0f,  0.0f, 0.0f,
+             50.0f, 0.0f, -50.0f, 50.0f, 0.0f,
+             50.0f, 0.0f,  50.0f, 50.0f, 50.0f,
+            -50.0f, 0.0f,  50.0f,  0.0f, 50.0f
+        };
+
+        glGenVertexArrays(1, &VAO);
+        glGenBuffers(1, &VBO);
+
+        glBindVertexArray(VAO);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+        // Position attribute
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+
+        // UV attribute
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        glBindVertexArray(0);
+
+        initShader();
+    }
+
+    ~Grid() 
+    {
+        glDeleteVertexArrays(1, &VAO);
+        glDeleteBuffers(1, &VBO);
+        glDeleteProgram(shaderProgram);
+    }
+
+    void initShader() 
+    {
+        std::string vertexSource = readShaderSource("../shaders/grid_vs.glsl");
+        std::string fragmentSource = readShaderSource("../shaders/grid_fs.glsl");
+        shaderProgram = createShaderProgram(vertexSource, fragmentSource);
+    }
+
+    void updateShader()
+    {
+        glDeleteProgram(shaderProgram);
+        initShader();
+    }
+
+    void render() 
+    {
+        glUseProgram(shaderProgram);
+        
+        setFloat(shaderProgram, "time", gc.currentTime);
+
+
+        glm::mat4 model = glm::mat4(1.0f);
+        glm::mat4 view = camera.getViewMatrix();
+        glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), 
+                                              (float)gc.width / (float)gc.height, 
+                                              0.1f, 100.0f);
+
+        setMat4(shaderProgram, "model", model);
+        setMat4(shaderProgram, "view", view);
+        setMat4(shaderProgram, "projection", projection);
+        setVec3(shaderProgram, "cameraPos", camera.pos);
+
+        GLboolean cullingEnabled;
+        glGetBooleanv(GL_CULL_FACE, &cullingEnabled);
+        GLint cullFaceMode;
+        glGetIntegerv(GL_CULL_FACE_MODE, &cullFaceMode);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);  // So we see it from both sides
+        
+        glBindVertexArray(VAO);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glBindVertexArray(0);
+
+        // Restore culling state
+        if (cullingEnabled) {
+            glEnable(GL_CULL_FACE);
+            glCullFace(cullFaceMode);
+        }
+    }
+};
+Grid *grid;
 
 struct Light
 {
@@ -735,6 +834,265 @@ struct Cube
 
 Cube *cube;
 
+struct Sphere
+{
+    GLuint VAO;
+    GLuint VBO;
+    GLuint EBO;
+
+    GLuint shaderProgram;
+
+    Coordinates axes;
+
+    glm::vec3 spherePositions[10];
+    glm::vec3 sphereColors[10];
+
+    std::vector<float> vertices;
+    std::vector<unsigned int> indices;
+
+    float radius = 0.5f;
+    int sectorCount = 36;
+    int stackCount = 18;
+
+    float shininess = 32.0f;
+
+    Sphere()
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            sphereColors[i] = getRandomSphereColor();
+        }
+
+        spherePositions[0] = glm::vec3(0.0f, 0.0f, 0.0f);
+        spherePositions[1] = glm::vec3(2.0f, 5.0f, -15.0f);
+        spherePositions[2] = glm::vec3(-1.5f, -2.2f, -2.5f);
+        spherePositions[3] = glm::vec3(-3.8f, -2.0f, -12.3f);
+        spherePositions[4] = glm::vec3(2.4f, -0.4f, -3.5f);
+        spherePositions[5] = glm::vec3(-1.7f, 3.0f, -7.5f);
+        spherePositions[6] = glm::vec3(1.3f, -2.0f, -2.5f);
+        spherePositions[7] = glm::vec3(1.5f, 2.0f, -2.5f);
+        spherePositions[8] = glm::vec3(1.5f, 0.2f, -1.5f);
+        spherePositions[9] = glm::vec3(-1.3f, 1.0f, -1.5f);
+
+        /*------------------------- setup vertex data and buffers and configure attributes -------------------------*/
+
+        generateSphere(vertices, indices, radius, sectorCount, stackCount);
+
+        // vertex array object: any subsequent vertex attribute calls from 
+        // that point on will be stored inside the VAO.
+        // configuring vertex attribute pointers only needed once
+        glGenVertexArrays(1, &VAO);
+        glBindVertexArray(VAO);
+        /*----------------------------------------------------------------------*/
+        // Element buffer object
+        glGenBuffers(1, &EBO);
+        // copy index array into element buffer for opengl to use
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), &indices[0], GL_STATIC_DRAW); // copy them to GPU
+        /*----------------------------------------------------------------------*/
+        // vertex buffer object : memory on the GPU where we store the vertex data
+        glGenBuffers(1, &VBO); // Generate a buffer object with unique ID
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+
+        /*----------------------------------------------------------------------*/
+        // copies the previously defined vertex data into the buffer's memory
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), &vertices[0], GL_STATIC_DRAW);
+
+        /*----------------------------------------------------------------------*/
+        // Tell OpenGL how it should interpret the vertex data (position attribute)
+        // Position attribute (location = 0)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+        // Enable the vertex attribute, giving the vertex attribute location as its argument
+        glEnableVertexAttribArray(0);
+
+        // Normal attribute (location = 1)
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        // Texture coordinate attribute (location = 2)
+        // 2D texture
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+
+        // UNBIND
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
+        initShaders();
+    }
+
+    ~Sphere()
+    {
+        glDeleteVertexArrays(1, &VAO);
+        glDeleteBuffers(1, &EBO);
+        glDeleteBuffers(1, &VBO);
+
+        glDeleteProgram(shaderProgram);
+    }
+
+    glm::mat4 rotate(int idx)
+    {
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, spherePositions[idx]);
+        return model;
+    }
+
+    void initShaders()
+    {
+        // Load and compile shaders
+        std::string vertexSource = readShaderSource("../shaders/sphere_vs.glsl");
+        std::string fragmentSource = readShaderSource("../shaders/sphere_fs.glsl");
+        shaderProgram = createShaderProgram(vertexSource, fragmentSource);
+    }
+
+    void updateShaders()
+    {
+        glDeleteProgram(shaderProgram);
+        initShaders();
+    }
+
+    glm::vec3 getRandomSphereColor()
+    {
+        // Generate random float values between 0.0 and 1.0 for r, g, b components
+        float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        float g = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        float b = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+
+        // Return color as vec3
+        return glm::vec3(r, g, b);
+    }
+
+    void render()
+    {
+        if (gc.debug)
+        {
+            renderDebugAxes();
+        }
+
+        // Activate shader program
+        glUseProgram(shaderProgram);
+
+        // Pass uniform variables to the shader
+        setFloat(shaderProgram, "iTime", gc.currentTime);
+        setFloat2(shaderProgram, "iResolution", (float)gc.width, (float)gc.height);
+
+        setVec3(shaderProgram, "viewPos", camera.pos);
+
+        setVec3(shaderProgram, "light.position", light->lightPos);
+        setVec3(shaderProgram, "light.diffuse", light->lightDiffuse);
+        setVec3(shaderProgram, "light.ambient", light->lightAmbient);
+        setVec3(shaderProgram, "light.specular", light->lightSpecular);
+
+        setVec3(shaderProgram, "material.ambient", glm::vec3(1.0f, 0.5f, 0.31f));
+        setVec3(shaderProgram, "material.diffuse", glm::vec3(1.0f, 0.5f, 0.31f));
+        setVec3(shaderProgram, "material.specular", glm::vec3(0.5f, 0.5f, 0.5f));
+        setFloat(shaderProgram, "material.shininess", shininess);
+
+        glm::mat4 view = camera.getViewMatrix();
+        glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), (float)gc.width / (float)gc.height, 0.1f, 100.0f);
+
+        for (unsigned int i = 0; i < 10; i++)
+        {
+            setVec3(shaderProgram, "objectColor", sphereColors[i]);
+
+            // camera.updateOrbitPosition(gc.currentTime, 10.0f);
+            glm::mat4 model = rotate(i);
+
+            setMat4(shaderProgram, "view", view);
+            setMat4(shaderProgram, "projection", projection);
+            setMat4(shaderProgram, "model", model);
+
+            // to render only the VAO is required to be bound
+            glBindVertexArray(VAO);
+            glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
+            glBindVertexArray(0);
+        }
+    }
+
+    void renderDebugAxes()
+    {
+        axes.model = rotate(3);
+        axes.render();
+    }
+
+    void generateSphere(std::vector<float>& vertices, std::vector<unsigned int>& indices, float radius, int sectorCount, int stackCount)
+    {
+        float x, y, z, xy;                              // vertex position
+        float nx, ny, nz, lengthInv = 1.0f / radius;    // vertex normal
+        float s, t;                                     // vertex texCoord
+
+        float sectorStep = 2 * M_PI / sectorCount;
+        float stackStep = M_PI / stackCount;
+        float sectorAngle, stackAngle;
+
+        for (int i = 0; i <= stackCount; ++i)
+        {
+            stackAngle = M_PI / 2 - i * stackStep;      // starting from pi/2 to -pi/2
+            xy = radius * cosf(stackAngle);             // r * cos(u)
+            z = radius * sinf(stackAngle);              // r * sin(u)
+
+            // add (sectorCount+1) vertices per stack
+            // the first and last vertices have same position and normal, but different tex coords
+            for (int j = 0; j <= sectorCount; ++j)
+            {
+                sectorAngle = j * sectorStep;           // starting from 0 to 2pi
+
+                // vertex position (x, y, z)
+                x = xy * cosf(sectorAngle);             // r * cos(u) * cos(v)
+                y = xy * sinf(sectorAngle);             // r * cos(u) * sin(v)
+                vertices.push_back(x);
+                vertices.push_back(y);
+                vertices.push_back(z);
+
+                // normalized vertex normal (nx, ny, nz)
+                nx = x * lengthInv;
+                ny = y * lengthInv;
+                nz = z * lengthInv;
+                vertices.push_back(nx);
+                vertices.push_back(ny);
+                vertices.push_back(nz);
+
+                // vertex tex coord (s, t) range between [0, 1]
+                s = (float)j / sectorCount;
+                t = (float)i / stackCount;
+                vertices.push_back(s);
+                vertices.push_back(t);
+            }
+        }
+
+        // generate CCW index list of sphere triangles
+        int k1, k2;
+        for (int i = 0; i < stackCount; ++i)
+        {
+            k1 = i * (sectorCount + 1);     // beginning of current stack
+            k2 = k1 + sectorCount + 1;      // beginning of next stack
+
+            for (int j = 0; j < sectorCount; ++j, ++k1, ++k2)
+            {
+                // 2 triangles per sector excluding first and last stacks
+                // k1 => k2 => k1+1
+                if (i != 0)
+                {
+                    indices.push_back(k1);
+                    indices.push_back(k2);
+                    indices.push_back(k1 + 1);
+                }
+
+                // k1+1 => k2 => k2+1
+                if (i != (stackCount - 1))
+                {
+                    indices.push_back(k1 + 1);
+                    indices.push_back(k2);
+                    indices.push_back(k2 + 1);
+                }
+            }
+        }
+    }
+};
+
+Sphere *sphere;
+
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
     (void)window;
@@ -781,6 +1139,7 @@ void processInput(GLFWwindow *window)
     {
         cube->updateShaders();
         light->updateShaders();
+        grid->updateShader();
     }
 
     camera.inputPoll(window);
@@ -957,6 +1316,7 @@ void renderScene()
         static float shininess = 32.0f;
         ImGui::SliderFloat("shininess", &cube->shininess, 1.0, 64.0);
 
+        ImGui::Checkbox("Sphere", &gc.sphere);
         ImGui::Checkbox("Debug", &gc.debug);
         ImGui::Checkbox("Wireframe", &gc.wireframe);
 
@@ -978,6 +1338,7 @@ void renderScene()
     if(gc.debug)
     {
         world_axes->render();
+        grid->render();
     }
 
     static bool set = false;
@@ -995,7 +1356,11 @@ void renderScene()
         }
     }
 
-    cube->render();
+    if(gc.sphere){
+        sphere->render();
+    }else{
+        cube->render();
+    }
 
     light->renderDebugCube();
 
@@ -1013,8 +1378,10 @@ int main(void)
 
     cube  = new Cube();
     light = new Light(cube->VBO, cube->EBO);
+    sphere  = new Sphere();
     
     world_axes  = new Coordinates();
+    grid = new Grid();
 
     // Render loop
     while(!glfwWindowShouldClose(gc.window))
