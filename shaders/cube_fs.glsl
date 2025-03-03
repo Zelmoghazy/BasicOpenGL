@@ -13,8 +13,6 @@ in vec3 FragPos;
 uniform float iTime;
 uniform vec2 iResolution;
 
-uniform vec3 objectColor;
-
 uniform vec3 viewPos;
 
 struct Material 
@@ -57,7 +55,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
     vec3 specular = light.specular * (spec * material.specular);  
 
-    vec3 result = (ambient + diffuse + specular) * objectColor;
+    vec3 result = (ambient + diffuse + specular);
     // fragColor = mix(texture(texture1, TexCoord), texture(texture2, TexCoord), sin(iTime))+ vec4(result, 1.0);
     // fragColor = vec4(result * lightColor, 1.0);
     fragColor = vec4(result, 1.0);

@@ -605,8 +605,16 @@ struct Cube
 
     float shininess = 32.0f;
 
+    glm::vec3 materialAmbient;
+    glm::vec3 materialDiffuse;
+    glm::vec3 materialSpecular;
+
     Cube()
     {
+        materialAmbient  = glm::vec3(1.0f, 0.5f, 0.31f);
+        materialDiffuse  = glm::vec3(1.0f, 0.5f, 0.31f);
+        materialSpecular = glm::vec3(0.5f, 0.5f, 0.5f);
+
         for(int i = 0; i < 10; i++)
         {
             cubeColors[i] = getRandomCubeColor();
@@ -778,6 +786,12 @@ struct Cube
         return glm::vec3(r, g, b);
     }
 
+    void updateCubeColor(int idx)
+    {
+        materialDiffuse = cubeColors[idx] * glm::vec3(0.5f); 
+        materialAmbient = materialDiffuse * glm::vec3(0.2f); 
+    }
+
     void render()
     {
         if(gc.debug)
@@ -799,20 +813,20 @@ struct Cube
         setVec3(shaderProgram, "light.ambient", light->lightAmbient);
         setVec3(shaderProgram, "light.specular", light->lightSpecular);
 
-        setVec3(shaderProgram, "material.ambient", glm::vec3(1.0f, 0.5f, 0.31f));
-        setVec3(shaderProgram, "material.diffuse", glm::vec3(1.0f, 0.5f, 0.31f));
-        setVec3(shaderProgram, "material.specular", glm::vec3(0.5f, 0.5f, 0.5f));
+        setVec3(shaderProgram, "material.specular", materialSpecular);
         setFloat(shaderProgram, "material.shininess", shininess);
 
         glm::mat4 view = camera.getViewMatrix();
         glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), (float)gc.width / (float)gc.height, 0.1f, 100.0f);
-
+        
         for(unsigned int i = 0; i < 10; i++)
         {
-            setVec3(shaderProgram, "objectColor", cubeColors[i]);
-
             // camera.updateOrbitPosition(gc.currentTime, 10.0f);
             glm::mat4 model = rotate(i);
+
+            updateCubeColor(i);
+            setVec3(shaderProgram, "material.ambient", materialAmbient);
+            setVec3(shaderProgram, "material.diffuse", materialDiffuse);
 
             setMat4(shaderProgram, "view", view);
             setMat4(shaderProgram, "projection", projection);        
@@ -856,8 +870,17 @@ struct Sphere
 
     float shininess = 32.0f;
 
+    glm::vec3 materialAmbient;
+    glm::vec3 materialDiffuse;
+    glm::vec3 materialSpecular;
+
+
     Sphere()
     {
+        materialAmbient  = glm::vec3(1.0f, 0.5f, 0.31f);
+        materialDiffuse  = glm::vec3(1.0f, 0.5f, 0.31f);
+        materialSpecular = glm::vec3(0.5f, 0.5f, 0.5f);
+
         for (int i = 0; i < 10; i++)
         {
             sphereColors[i] = getRandomSphereColor();
@@ -962,6 +985,12 @@ struct Sphere
         return glm::vec3(r, g, b);
     }
 
+    void updateSphereColor(int idx)
+    {
+        materialDiffuse = sphereColors[idx] * glm::vec3(0.5f); 
+        materialAmbient = materialDiffuse * glm::vec3(0.2f); 
+    }
+
     void render()
     {
         if (gc.debug)
@@ -983,9 +1012,7 @@ struct Sphere
         setVec3(shaderProgram, "light.ambient", light->lightAmbient);
         setVec3(shaderProgram, "light.specular", light->lightSpecular);
 
-        setVec3(shaderProgram, "material.ambient", glm::vec3(1.0f, 0.5f, 0.31f));
-        setVec3(shaderProgram, "material.diffuse", glm::vec3(1.0f, 0.5f, 0.31f));
-        setVec3(shaderProgram, "material.specular", glm::vec3(0.5f, 0.5f, 0.5f));
+        setVec3(shaderProgram, "material.specular",materialSpecular);
         setFloat(shaderProgram, "material.shininess", shininess);
 
         glm::mat4 view = camera.getViewMatrix();
@@ -993,11 +1020,13 @@ struct Sphere
 
         for (unsigned int i = 0; i < 10; i++)
         {
-            setVec3(shaderProgram, "objectColor", sphereColors[i]);
-
             // camera.updateOrbitPosition(gc.currentTime, 10.0f);
             glm::mat4 model = rotate(i);
 
+            updateSphereColor(i);
+            setVec3(shaderProgram, "material.ambient", materialAmbient);
+            setVec3(shaderProgram, "material.diffuse", materialDiffuse);
+            
             setMat4(shaderProgram, "view", view);
             setMat4(shaderProgram, "projection", projection);
             setMat4(shaderProgram, "model", model);
@@ -1314,7 +1343,11 @@ void renderScene()
         ImGui::SliderFloat("translation_z", &translation_z, 0.0, 1.0);
 
         static float shininess = 32.0f;
-        ImGui::SliderFloat("shininess", &cube->shininess, 1.0, 64.0);
+        if(gc.sphere){
+            ImGui::SliderFloat("shininess", &sphere->shininess, 1.0, 64.0);
+        }else{
+            ImGui::SliderFloat("shininess", &cube->shininess, 1.0, 64.0);
+        }
 
         ImGui::Checkbox("Sphere", &gc.sphere);
         ImGui::Checkbox("Debug", &gc.debug);

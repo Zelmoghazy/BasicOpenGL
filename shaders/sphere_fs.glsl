@@ -11,7 +11,7 @@ in vec3 FragPos;
 // Uniforms for time, resolution, and lighting
 uniform float iTime;
 uniform vec2 iResolution;
-uniform vec3 objectColor;
+
 uniform vec3 viewPos;
 
 // Material properties
@@ -54,7 +54,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     vec3 specular = light.specular * (spec * material.specular);
 
     // Combine lighting and object color
-    vec3 result = (ambient + diffuse + specular) * objectColor;
+    vec3 result = (ambient + diffuse + specular);
     fragColor = vec4(result, 1.0);
 }
 
