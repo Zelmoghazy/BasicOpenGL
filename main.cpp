@@ -19,7 +19,7 @@
 
 #include <Shaders.hpp>
 
-#define M_PI 3.14159265358979323846
+#define M_PI            3.14159265358979323846
 
 // Use the better GPU ?
 #ifdef _WIN32
@@ -71,10 +71,56 @@ struct global_context
     float       mouseLastY      = 300;
 
     GLFWwindow  *window;
-    GLuint      *textures;
 };
 
 global_context gc;
+
+struct Texture 
+{
+    GLuint id;
+    std::string path;
+    int width, height, nrChannels;
+
+    Texture(const std::string& texturePath) : path(texturePath), width(0), height(0), nrChannels(0)
+    {
+        // Generate texture ID
+        glGenTextures(1, &id);
+        glBindTexture(GL_TEXTURE_2D, id);
+
+        // Set texture wrapping and filtering options
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        // Filtering
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); // scaling down
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); // scaling up
+
+        // Load image
+        stbi_set_flip_vertically_on_load(true);
+        unsigned char* data = stbi_load(path.c_str(), &width, &height, &nrChannels, 0);
+
+        if (data) {
+            GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+            glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+            glGenerateMipmap(GL_TEXTURE_2D);
+        } else {
+            std::cerr << "Failed to load texture: " << path << std::endl;
+        }
+        stbi_image_free(data);
+    }
+
+    void bind(GLenum textureUnit) const 
+    {
+        glActiveTexture(textureUnit);
+        glBindTexture(GL_TEXTURE_2D, id);
+    }
+
+    ~Texture() 
+    {
+        glDeleteTextures(1, &id);
+    }
+};
+Texture* texture1;
+Texture* texture2;
 
 struct Camera
 {
@@ -83,6 +129,12 @@ struct Camera
     glm::vec3   up;
     glm::vec3   right;
     glm::vec3   world_up;
+
+    glm::mat4   view;
+    glm::mat4   projection;
+
+    float zNear = 0.1f;
+    float zFar  = 100.0f;
 
     // Euler angles
     float       yaw     = -90.0f;
@@ -98,6 +150,9 @@ struct Camera
            glm::vec3 u  = glm::vec3(0.0f, 1.0f, 0.0f))
         : pos(p), front(fr), up(u), world_up(u) 
     {
+        updateViewMatrix();
+        updateProjectionMatrix();
+
         updateVectors();
     };
 
@@ -108,10 +163,25 @@ struct Camera
         glm::vec3 cameraRight = glm::normalize(glm::cross(up, cameraDirection));
         glm::vec3 cameraUp = glm::cross(cameraDirection, cameraRight);
     */    
-    glm::mat4 getViewMatrix() 
+    void updateViewMatrix() 
     {
-        return glm::lookAt(pos, pos + front, up);
+        view = glm::lookAt(pos, pos + front, up);
     }
+
+    void updateProjectionMatrix()
+    {
+        projection = glm::perspective(glm::radians(zoom), (float)gc.width / (float)gc.height, zNear, zFar);
+    }
+
+    glm::mat4 getViewMatrix()
+    {
+        return view;
+    } 
+
+    glm::mat4 getProjectionMatrix()
+    {
+        return projection;
+    } 
 
     void updateVectors()
     {
@@ -124,6 +194,8 @@ struct Camera
 
         right = glm::normalize(glm::cross(front, world_up));
         up = glm::normalize(glm::cross(right, front));
+
+        updateViewMatrix();
     }
 
     void updateAngle(float xoffs, float yoffs)
@@ -147,6 +219,7 @@ struct Camera
         yaw = -90.0f;  // Face along the negative Z-axis
         pitch = 0.0f;  // No tilt up or down
         pos = glm::vec3(0.0f, 0.0f, 10.0f); // Position the camera along the Z-axis
+
         updateVectors();
     }
 
@@ -155,6 +228,7 @@ struct Camera
         yaw = 0.0f;    // Face along the negative X-axis
         pitch = 0.0f;  // No tilt up or down
         pos = glm::vec3(-10.0f, 0.0f, 0.0f); // Position the camera along the X-axis
+
         updateVectors();
     }
 
@@ -163,6 +237,7 @@ struct Camera
         yaw = -90.0f;  // Face along the negative Z-axis
         pitch = 90.0f; // Look straight down along the Y-axis
         pos = glm::vec3(0.0f, -10.0f, 0.0f); // Position the camera along the Y-axis;
+
         updateVectors();
     }
 
@@ -171,6 +246,7 @@ struct Camera
         yaw = -45.0f;  // Diagonal view
         pitch = -45.0f; // Tilt down slightly
         pos = glm::vec3(-10.0f, -10.0f, 10.0f); // Position the camera diagonally
+
         updateVectors();
     }
 
@@ -179,6 +255,7 @@ struct Camera
         yaw = -90.0f;  // Face along the negative Z-axis
         pitch = -89.9f; // Look straight down (slightly less than 90 to avoid gimbal lock)
         pos = glm::vec3(0.0f, -10.0f, 0.0f); // Position the camera above the scene
+
         updateVectors();
     }
 
@@ -187,6 +264,7 @@ struct Camera
         yaw = -90.0f;  // Face along the negative Z-axis
         pitch = 0.0f;  // No tilt
         pos = glm::vec3(0.0f, 0.0f, 10.0f); // Position the camera in front of the scene
+
         updateVectors();
     }
 
@@ -195,17 +273,22 @@ struct Camera
         yaw = 0.0f;    // Face along the negative X-axis
         pitch = 0.0f;  // No tilt
         pos = glm::vec3(-10.0f, 0.0f, 0.0f); // Position the camera to the side of the scene
+
         updateVectors();
     }
 
     void moveForward()
     {
         pos += speed * front;
+
+        updateViewMatrix();
     }
 
     void moveBackward()
     {
         pos -= speed * front;
+
+        updateViewMatrix();
     }
 
     void moveLeft()
@@ -213,12 +296,15 @@ struct Camera
         // pos -= glm::normalize(glm::cross(front, up)) * speed;
         pos -= right * speed;
 
+        updateViewMatrix(); 
     }
 
     void moveRight()
     {
         // pos += glm::normalize(glm::cross(front, up)) * speed;
         pos += right * speed;
+
+        updateViewMatrix(); 
     }
 
     void tiltUp()
@@ -248,10 +334,14 @@ struct Camera
             zoom = 1.0f;
         if (zoom > 45.0f)
             zoom = 45.0f;
+
+        updateProjectionMatrix();
     }
 
     void inputPoll(GLFWwindow *window)
     {
+        speed  = 2.5f * gc.deltaTime;
+
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
             moveForward();
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
@@ -295,10 +385,11 @@ Camera camera;
 
 struct Coordinates
 {
-    GLuint axesVAO;
-    GLuint axesVBO;
+    GLuint VAO;
+    GLuint VBO;
 
     GLuint shaderProgram;
+
     glm::mat4 model;
 
     Coordinates() : model(glm::mat4(1.0f))
@@ -324,12 +415,12 @@ struct Coordinates
             0.0f, 0.0f, 5.0f,       0.0f, 0.0f, 1.0f  // Z direction
         };
 
-        glGenVertexArrays(1, &axesVAO);
-        glGenBuffers(1, &axesVBO);
+        glGenVertexArrays(1, &VAO);
+        glGenBuffers(1, &VBO);
 
-        glBindVertexArray(axesVAO);
+        glBindVertexArray(VAO);
 
-        glBindBuffer(GL_ARRAY_BUFFER, axesVBO);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
         glBufferData(GL_ARRAY_BUFFER, sizeof(axesVertices), axesVertices, GL_STATIC_DRAW);
 
         // Position attribute
@@ -360,15 +451,12 @@ struct Coordinates
     {
         glUseProgram(shaderProgram);
 
-        glm::mat4 view = camera.getViewMatrix();
-        glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), (float)gc.width / (float)gc.height, 0.1f, 100.0f);
-
         setMat4(shaderProgram, "model", model);
-        setMat4(shaderProgram, "view", view);
-        setMat4(shaderProgram, "projection", projection);
+        setMat4(shaderProgram, "view", camera.getViewMatrix());
+        setMat4(shaderProgram, "projection", camera.getProjectionMatrix());
 
         glLineWidth(2.0f);
-        glBindVertexArray(axesVAO);
+        glBindVertexArray(VAO);
         glDrawArrays(GL_LINES, 0, 6); // 6 vertices for 3 lines (X, Y, Z)
         glBindVertexArray(0);
         glLineWidth(1.0f); // Reset to default
@@ -380,17 +468,33 @@ struct Grid
 {
     GLuint VAO;
     GLuint VBO;
+
     GLuint shaderProgram;
 
-    Grid() 
+    glm::mat4 model;
+
+    Grid(): model(glm::mat4(1.0f)) 
+    {
+        setupGrid();
+        initShader();
+    }
+
+    ~Grid() 
+    {
+        glDeleteVertexArrays(1, &VAO);
+        glDeleteBuffers(1, &VBO);
+        glDeleteProgram(shaderProgram);
+    }
+
+    void setupGrid()
     {
         // A large quad for the grid (XZ plane)
         const float vertices[] = {
-            // Positions         // UVs
-            -50.0f, 0.0f, -50.0f,  0.0f, 0.0f,
-             50.0f, 0.0f, -50.0f, 50.0f, 0.0f,
-             50.0f, 0.0f,  50.0f, 50.0f, 50.0f,
-            -50.0f, 0.0f,  50.0f,  0.0f, 50.0f
+            // Positions                 // UVs
+            -50.0f, 0.0f, -50.0f,        0.0f, 0.0f,
+             50.0f, 0.0f, -50.0f,       50.0f, 0.0f,
+             50.0f, 0.0f,  50.0f,       50.0f, 50.0f,
+            -50.0f, 0.0f,  50.0f,        0.0f, 50.0f
         };
 
         glGenVertexArrays(1, &VAO);
@@ -409,15 +513,6 @@ struct Grid
         glEnableVertexAttribArray(1);
 
         glBindVertexArray(0);
-
-        initShader();
-    }
-
-    ~Grid() 
-    {
-        glDeleteVertexArrays(1, &VAO);
-        glDeleteBuffers(1, &VBO);
-        glDeleteProgram(shaderProgram);
     }
 
     void initShader() 
@@ -439,16 +534,10 @@ struct Grid
         
         setFloat(shaderProgram, "time", gc.currentTime);
 
-
-        glm::mat4 model = glm::mat4(1.0f);
-        glm::mat4 view = camera.getViewMatrix();
-        glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), 
-                                              (float)gc.width / (float)gc.height, 
-                                              0.1f, 100.0f);
-
         setMat4(shaderProgram, "model", model);
-        setMat4(shaderProgram, "view", view);
-        setMat4(shaderProgram, "projection", projection);
+        setMat4(shaderProgram, "view", camera.getViewMatrix());
+        setMat4(shaderProgram, "projection", camera.getProjectionMatrix());
+
         setVec3(shaderProgram, "cameraPos", camera.pos);
 
         GLboolean cullingEnabled;
@@ -481,9 +570,10 @@ struct Light
 
     GLuint shaderProgram;
 
-    glm::vec3 lightPos;
+    glm::mat4 model;
 
-    glm::vec3 lightCol; // diffuse
+    glm::vec3 lightPos;
+    glm::vec3 lightCol;
 
     glm::vec3 lightDiffuse;
     glm::vec3 lightAmbient;
@@ -492,18 +582,16 @@ struct Light
     Coordinates axes;
 
     Light(GLuint CubeVBO, GLuint CubeEBO) 
+        : lightPos(glm::vec3(1.2f, 1.0f, 2.0f)),
+          lightCol(glm::vec3(1.0f, 1.0f, 1.0f)),
+          lightDiffuse(glm::vec3(0.5f, 0.5f, 0.5f)),
+          lightAmbient(glm::vec3(0.2f, 0.2f, 0.2f)),
+          lightSpecular(glm::vec3(1.0f, 1.0f, 1.0f)),
+          VBO(CubeVBO),
+          EBO(CubeEBO)
     {
-        lightPos = glm::vec3(1.2f, 1.0f, 2.0f);
-        lightCol = glm::vec3(1.0f, 1.0f, 1.0f);
-
-        lightDiffuse = glm::vec3(0.5f, 0.5f, 0.5f);
-        lightAmbient = glm::vec3(0.2f, 0.2f, 0.2f);
-        lightSpecular = glm::vec3(1.0f, 1.0f, 1.0f);
-
-        VBO = CubeVBO;
-        EBO = CubeEBO;
-
-        configDebugCube();
+        positionDebugCube();   
+        setupDebugCube();
         initShaders();
     }
 
@@ -526,7 +614,7 @@ struct Light
         initShaders();
     }
 
-    void configDebugCube()
+    void setupDebugCube()
     {
         glGenVertexArrays(1, &VAO);
         glBindVertexArray(VAO);
@@ -545,6 +633,8 @@ struct Light
 
     void renderDebugCube() 
     {   
+        positionDebugCube();
+
         if(gc.debug)
         {
             renderDebugAxes();
@@ -554,14 +644,9 @@ struct Light
 
         setVec3(shaderProgram, "lightColor", lightCol);
 
-        glm::mat4 view = camera.getViewMatrix();
-        glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), (float)gc.width / (float)gc.height, 0.1f, 100.0f);
-
-        setMat4(shaderProgram, "view", view);
-        setMat4(shaderProgram, "projection", projection); 
-        glm::mat4 model = positionDebugCube();
-
         setMat4(shaderProgram, "model", model);
+        setMat4(shaderProgram, "view", camera.getViewMatrix());
+        setMat4(shaderProgram, "projection", camera.getProjectionMatrix()); 
 
         glBindVertexArray(VAO);
         glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0); // Use EBO
@@ -570,7 +655,7 @@ struct Light
 
     void renderDebugAxes()
     {
-        axes.model = positionDebugCube();
+        axes.model = model;
         axes.render();
     }
 
@@ -579,12 +664,12 @@ struct Light
         lightDiffuse = lightCol * glm::vec3(0.5f); 
         lightAmbient = lightDiffuse * glm::vec3(0.2f); 
     }
-    glm::mat4 positionDebugCube()
+
+    void positionDebugCube()
     {
-        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::mat4(1.0f);
         model = glm::translate(model, lightPos);
         model = glm::scale(model, glm::vec3(0.2f));
-        return model; 
     }
 };
 
@@ -603,6 +688,8 @@ struct Cube
     glm::vec3  cubePositions[10];
     glm::vec3  cubeColors[10];
 
+    glm::mat4  model;
+
     float shininess = 32.0f;
 
     glm::vec3 materialAmbient;
@@ -610,6 +697,21 @@ struct Cube
     glm::vec3 materialSpecular;
 
     Cube()
+    {
+        setupCube();
+        initShaders();
+    }
+
+    ~Cube()
+    {
+        glDeleteVertexArrays(1, &VAO);
+        glDeleteBuffers(1, &EBO);
+        glDeleteBuffers(1, &VBO);
+
+        glDeleteProgram(shaderProgram);
+    }
+
+    void setupCube()
     {
         materialAmbient  = glm::vec3(1.0f, 0.5f, 0.31f);
         materialDiffuse  = glm::vec3(1.0f, 0.5f, 0.31f);
@@ -740,25 +842,13 @@ struct Cube
         // UNBIND
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
-
-        initShaders();
     }
 
-    ~Cube()
+    void positionCube(int idx)
     {
-        glDeleteVertexArrays(1, &VAO);
-        glDeleteBuffers(1, &EBO);
-        glDeleteBuffers(1, &VBO);
-
-        glDeleteProgram(shaderProgram);
-    }
-
-    glm::mat4 rotate(int idx)
-    {
-        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::mat4(1.0f);
         model = glm::translate(model, cubePositions[idx]);
         model = glm::rotate(model, sin(gc.currentTime), glm::vec3(1.0f, 0.3f, 0.5f));
-        return model;
     }
 
     void initShaders()
@@ -817,20 +907,20 @@ struct Cube
         setFloat(shaderProgram, "material.shininess", shininess);
 
         glm::mat4 view = camera.getViewMatrix();
-        glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), (float)gc.width / (float)gc.height, 0.1f, 100.0f);
+        glm::mat4 projection = camera.getProjectionMatrix();
         
-        for(unsigned int i = 0; i < 10; i++)
+        for(int i = 0; i < 10; i++)
         {
             // camera.updateOrbitPosition(gc.currentTime, 10.0f);
-            glm::mat4 model = rotate(i);
-
+            positionCube(i);
             updateCubeColor(i);
+
             setVec3(shaderProgram, "material.ambient", materialAmbient);
             setVec3(shaderProgram, "material.diffuse", materialDiffuse);
 
+            setMat4(shaderProgram, "model", model); 
             setMat4(shaderProgram, "view", view);
             setMat4(shaderProgram, "projection", projection);        
-            setMat4(shaderProgram, "model", model);
 
             // to render only the VAO is required to be bound
             glBindVertexArray(VAO);
@@ -841,7 +931,8 @@ struct Cube
 
     void renderDebugAxes()
     {
-        axes.model = rotate(3);
+        positionCube(3);
+        axes.model = model;
         axes.render(); 
     }
 };
@@ -861,6 +952,8 @@ struct Sphere
     glm::vec3 spherePositions[10];
     glm::vec3 sphereColors[10];
 
+    glm::mat4 model;
+
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
 
@@ -876,6 +969,21 @@ struct Sphere
 
 
     Sphere()
+    {
+        setupSphere();
+        initShaders();
+    }
+
+    ~Sphere()
+    {
+        glDeleteVertexArrays(1, &VAO);
+        glDeleteBuffers(1, &EBO);
+        glDeleteBuffers(1, &VBO);
+
+        glDeleteProgram(shaderProgram);
+    }
+
+    void setupSphere()
     {
         materialAmbient  = glm::vec3(1.0f, 0.5f, 0.31f);
         materialDiffuse  = glm::vec3(1.0f, 0.5f, 0.31f);
@@ -940,24 +1048,12 @@ struct Sphere
         // UNBIND
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
-
-        initShaders();
     }
 
-    ~Sphere()
+    void positionSphere(int idx)
     {
-        glDeleteVertexArrays(1, &VAO);
-        glDeleteBuffers(1, &EBO);
-        glDeleteBuffers(1, &VBO);
-
-        glDeleteProgram(shaderProgram);
-    }
-
-    glm::mat4 rotate(int idx)
-    {
-        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::mat4(1.0f);
         model = glm::translate(model, spherePositions[idx]);
-        return model;
     }
 
     void initShaders()
@@ -1016,20 +1112,20 @@ struct Sphere
         setFloat(shaderProgram, "material.shininess", shininess);
 
         glm::mat4 view = camera.getViewMatrix();
-        glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), (float)gc.width / (float)gc.height, 0.1f, 100.0f);
+        glm::mat4 projection = camera.getProjectionMatrix();
 
         for (unsigned int i = 0; i < 10; i++)
         {
             // camera.updateOrbitPosition(gc.currentTime, 10.0f);
-            glm::mat4 model = rotate(i);
-
+            positionSphere(i);
             updateSphereColor(i);
+
             setVec3(shaderProgram, "material.ambient", materialAmbient);
             setVec3(shaderProgram, "material.diffuse", materialDiffuse);
             
+            setMat4(shaderProgram, "model", model);
             setMat4(shaderProgram, "view", view);
             setMat4(shaderProgram, "projection", projection);
-            setMat4(shaderProgram, "model", model);
 
             // to render only the VAO is required to be bound
             glBindVertexArray(VAO);
@@ -1040,7 +1136,8 @@ struct Sphere
 
     void renderDebugAxes()
     {
-        axes.model = rotate(3);
+        positionSphere(3);
+        axes.model = model;
         axes.render();
     }
 
@@ -1128,6 +1225,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
     gc.width = width;
     gc.height = height;
     glViewport(0, 0, gc.width, gc.height);
+    camera.updateProjectionMatrix();
 }
 
 void window_refresh_callback(GLFWwindow* window)
@@ -1163,10 +1261,10 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 
 void processInput(GLFWwindow *window)
 {
-    camera.speed  = 2.5f * gc.deltaTime;
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
     {
         cube->updateShaders();
+        sphere->updateShaders();
         light->updateShaders();
         grid->updateShader();
     }
@@ -1233,61 +1331,11 @@ void initIMGUI(GLFWwindow *window)
     /* IMGUI Stuff */
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
+    // ImGuiIO &io = ImGui::GetIO();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
     ImGui::StyleColorsDark();
-}
-
-void initTextures()
-{
-    /*-------------------------------------- Load and Create Texture --------------------------------------*/
-    gc.textures = new GLuint[2];
-
-    glGenTextures(2, gc.textures);
-
-    glBindTexture(GL_TEXTURE_2D, gc.textures[0]);  
-    // set the texture wrapping/filtering options (on the currently bound texture object)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);   
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    // Filtering
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); // scaling down
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);               // scaling up
-
-    // Load image
-    int width, height, nrChannels;
-    stbi_set_flip_vertically_on_load(true);
-
-    unsigned char *data = stbi_load("../assets/wood_texture.jpg", &width, &height, &nrChannels, 0);
-
-    if(data){
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-    }else{
-        std::cerr << "Failed to load texture" << std::endl;
-    }
-
-    stbi_image_free(data); // not needed anymore
-
-    // Texture 2
-    glBindTexture(GL_TEXTURE_2D, gc.textures[1]);  
-    // set the texture wrapping/filtering options (on the currently bound texture object)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);   
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    // Filtering
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); // scaling down
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);               // scaling up
-
-    data = stbi_load("../assets/burger.png", &width, &height, &nrChannels, 0);
-    if (data){
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-    }else{
-        std::cerr << "Failed to load texture" << std::endl;
-    }
-
-    stbi_image_free(data); // not needed anymore
 }
 
 void useTextures()
@@ -1296,11 +1344,9 @@ void useTextures()
     setInt(cube->shaderProgram, "texture1", 0);
     setInt(cube->shaderProgram, "texture2", 1);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, gc.textures[0]);
-
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, gc.textures[1]);
+    // Bind textures
+    texture1->bind(GL_TEXTURE0);
+    texture2->bind(GL_TEXTURE1);
 }
 
 void cleanupGL()
@@ -1308,11 +1354,16 @@ void cleanupGL()
     glfwTerminate();
 }
 
-void renderScene()
+void clearBackground(float r, float g, float b, float a)
 {
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    glClearColor(r, g, b, a);
     // only clear the color buffer
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+void renderScene()
+{
+    clearBackground(0.1f, 0.1f, 0.1f, 1.0f);
 
     useTextures();
 
@@ -1404,17 +1455,17 @@ void renderScene()
 int main(void)
 {
     gc.window = initGL();
-
     initIMGUI(gc.window);
 
-    initTextures();
+    texture1 = new Texture("../assets/wood_texture.jpg");
+    texture2 = new Texture("../assets/metallic_texture.jpg");
 
-    cube  = new Cube();
-    light = new Light(cube->VBO, cube->EBO);
-    sphere  = new Sphere();
-    
     world_axes  = new Coordinates();
-    grid = new Grid();
+    grid        = new Grid();
+
+    cube    = new Cube();
+    light   = new Light(cube->VBO, cube->EBO);
+    sphere  = new Sphere();
 
     // Render loop
     while(!glfwWindowShouldClose(gc.window))

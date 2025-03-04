@@ -15,10 +15,13 @@ uniform vec2 iResolution;
 
 uniform vec3 viewPos;
 
+uniform sampler2D texture1;
+uniform sampler2D texture2;
+
 struct Material 
 {
-    vec3 ambient;
     vec3 diffuse;
+    vec3 ambient;
     vec3 specular;
     float shininess;
 }; 
@@ -35,8 +38,6 @@ struct Light
 
 uniform Light light;
 
-uniform sampler2D texture1;
-uniform sampler2D texture2;
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
