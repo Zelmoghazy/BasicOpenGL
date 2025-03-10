@@ -30,8 +30,6 @@
     }
 #endif
 
-void useTextures();
-
 struct Vec4
 {
     float x;
@@ -67,6 +65,8 @@ struct global_context
     bool        sphere;
 
     bool        firstMouse      = true;
+    float       mouseX          = 0;
+    float       mouseY          = 0;
     float       mouseLastX      = 400;
     float       mouseLastY      = 300;
 
@@ -79,9 +79,10 @@ struct Texture
 {
     GLuint id;
     std::string path;
+    std::string uniform;
     int width, height, nrChannels;
 
-    Texture(const std::string& texturePath) : path(texturePath), width(0), height(0), nrChannels(0)
+    Texture(const std::string& texturePath, const std::string& uniform) : path(texturePath), uniform(uniform), width(0), height(0), nrChannels(0)
     {
         // Generate texture ID
         glGenTextures(1, &id);
@@ -108,19 +109,25 @@ struct Texture
         stbi_image_free(data);
     }
 
-    void bind(GLenum textureUnit) const 
+    void bind(GLenum textureUnit = GL_TEXTURE0) const 
     {
         glActiveTexture(textureUnit);
         glBindTexture(GL_TEXTURE_2D, id);
     }
 
+    void useTextures(GLuint shaderProgram,  unsigned int textureUnit = 0)
+    {
+        // pass textures to the shader
+        setInt(shaderProgram, uniform.c_str(), textureUnit);
+
+        GLenum glTextureUnit = GL_TEXTURE0 + textureUnit;
+        bind(glTextureUnit);
+    }
     ~Texture() 
     {
         glDeleteTextures(1, &id);
     }
 };
-Texture* texture1;
-Texture* texture2;
 
 struct Camera
 {
@@ -683,19 +690,23 @@ struct Cube
 
     GLuint     shaderProgram;
 
+    glm::mat4  model;
+
     Coordinates axes;
 
     glm::vec3  cubePositions[10];
     glm::vec3  cubeColors[10];
 
-    glm::mat4  model;
-
-    float shininess = 32.0f;
+    Texture* diffuseMap;
+    Texture* specularMap;
+    Texture* emissionMap;
 
     glm::vec3 materialAmbient;
     glm::vec3 materialDiffuse;
     glm::vec3 materialSpecular;
 
+    float shininess = 32.0f;
+    
     Cube()
     {
         setupCube();
@@ -713,9 +724,9 @@ struct Cube
 
     void setupCube()
     {
-        materialAmbient  = glm::vec3(1.0f, 0.5f, 0.31f);
-        materialDiffuse  = glm::vec3(1.0f, 0.5f, 0.31f);
-        materialSpecular = glm::vec3(0.5f, 0.5f, 0.5f);
+        // materialAmbient  = glm::vec3(1.0f, 0.5f, 0.31f);
+        // materialDiffuse  = glm::vec3(1.0f, 0.5f, 0.31f);
+        // materialSpecular = glm::vec3(0.5f, 0.5f, 0.5f);
 
         for(int i = 0; i < 10; i++)
         {
@@ -903,20 +914,22 @@ struct Cube
         setVec3(shaderProgram, "light.ambient", light->lightAmbient);
         setVec3(shaderProgram, "light.specular", light->lightSpecular);
 
-        setVec3(shaderProgram, "material.specular", materialSpecular);
+        // setVec3(shaderProgram, "material.specular", materialSpecular);
+        // setVec3(shaderProgram, "material.ambient", materialAmbient);
+        // setVec3(shaderProgram, "material.diffuse", materialDiffuse);
         setFloat(shaderProgram, "material.shininess", shininess);
+
+        diffuseMap->useTextures(shaderProgram, 0);
+        specularMap->useTextures(shaderProgram, 1);
+        emissionMap->useTextures(shaderProgram, 2);
 
         glm::mat4 view = camera.getViewMatrix();
         glm::mat4 projection = camera.getProjectionMatrix();
         
         for(int i = 0; i < 10; i++)
         {
-            // camera.updateOrbitPosition(gc.currentTime, 10.0f);
             positionCube(i);
-            updateCubeColor(i);
-
-            setVec3(shaderProgram, "material.ambient", materialAmbient);
-            setVec3(shaderProgram, "material.diffuse", materialDiffuse);
+            // updateCubeColor(i);
 
             setMat4(shaderProgram, "model", model); 
             setMat4(shaderProgram, "view", view);
@@ -1147,13 +1160,13 @@ struct Sphere
         float nx, ny, nz, lengthInv = 1.0f / radius;    // vertex normal
         float s, t;                                     // vertex texCoord
 
-        float sectorStep = 2 * M_PI / sectorCount;
-        float stackStep = M_PI / stackCount;
+        float sectorStep = (float)(2 * M_PI / sectorCount);
+        float stackStep = (float)(M_PI / stackCount);
         float sectorAngle, stackAngle;
 
         for (int i = 0; i <= stackCount; ++i)
         {
-            stackAngle = M_PI / 2 - i * stackStep;      // starting from pi/2 to -pi/2
+            stackAngle = (float)(M_PI / 2 - i * stackStep);      // starting from pi/2 to -pi/2
             xy = radius * cosf(stackAngle);             // r * cos(u)
             z = radius * sinf(stackAngle);              // r * sin(u)
 
@@ -1219,6 +1232,66 @@ struct Sphere
 Sphere *sphere;
 
 
+struct Ui
+{
+    float rotation = 0.0f;
+    float vec3a[3] = { 1.0f, 1.0f, 1.0f};
+    float col1[3] = { 1.0f, 1.0f, 1.0f };
+    float bgcol[3] = { 0.0f, 0.0f, 0.0f };
+    float shininess = 32.0f;
+    char str0[128];
+
+    Ui(GLFWwindow *window)
+    {
+        /* IMGUI Stuff */
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        // ImGuiIO &io = ImGui::GetIO();
+        ImGui_ImplGlfw_InitForOpenGL(window, true);
+        ImGui_ImplOpenGL3_Init("#version 330");
+
+        ImGui::StyleColorsDark();
+    }
+
+    void beginFrame() 
+    {
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+    }
+
+    void debugSetup()
+    {
+        ImGui::Begin("Debug");
+            ImGui::SliderFloat("rotation", &rotation, 0, 360); 
+            ImGui::ColorEdit3("Background Color", bgcol);
+
+            ImGui::SliderFloat3("lightPos", vec3a, -15.0f, 15.0f);
+            ImGui::ColorEdit3("lightCol", col1);
+
+            if(gc.sphere){
+                ImGui::SliderFloat("shininess", &sphere->shininess, 1.0, 64.0);
+            }else{
+                ImGui::SliderFloat("shininess", &cube->shininess, 1.0, 64.0);
+            }
+
+            ImGui::Checkbox("Sphere", &gc.sphere);
+            ImGui::Checkbox("Debug", &gc.debug);
+            ImGui::Checkbox("Wireframe", &gc.wireframe);
+
+            sprintf_s(str0, "Time: %f ms/frame", gc.deltaTime*1000.0f);
+            ImGui::Text(str0);
+        ImGui::End();
+    }
+
+    void render() 
+    {
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    }
+};
+Ui *ui;
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
     (void)window;
@@ -1233,21 +1306,31 @@ void window_refresh_callback(GLFWwindow* window)
     glfwSwapBuffers(window);
 }
 
-void mouse_callback(GLFWwindow* window, double xpos, double ypos)
+void getMouseDelta(float *xoffset, float *yoffset)
 {
-    (void)window;
     if (gc.firstMouse)
     {
-        gc.mouseLastX = (float)xpos;
-        gc.mouseLastY = (float)ypos;
+        gc.mouseLastX = (float)gc.mouseX;
+        gc.mouseLastY = (float)gc.mouseY;
         gc.firstMouse = false;
     }
 
-    float xoffset = (float)xpos - gc.mouseLastX;
-    float yoffset = gc.mouseLastY - (float)ypos; // reversed since y-coordinates range from bottom to top
+    *xoffset = (float)gc.mouseX - gc.mouseLastX;
+    *yoffset = gc.mouseLastY - (float)gc.mouseY; // reversed since y-coordinates range from bottom to top
 
-    gc.mouseLastX = (float)xpos;
-    gc.mouseLastY = (float)ypos;
+    gc.mouseLastX = (float)gc.mouseX;
+    gc.mouseLastY = (float)gc.mouseY;
+}
+
+void mouse_callback(GLFWwindow* window, double xpos, double ypos)
+{
+    (void)window;
+
+    gc.mouseX = (float)xpos;
+    gc.mouseY = (float)ypos;
+
+    float xoffset, yoffset;
+    getMouseDelta(&xoffset, &yoffset);
 
     // gc.camera.updateAngle(xoffset, yoffset);
 }
@@ -1326,29 +1409,6 @@ GLFWwindow *initGL()
     return window;  
 }
 
-void initIMGUI(GLFWwindow *window)
-{
-    /* IMGUI Stuff */
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    // ImGuiIO &io = ImGui::GetIO();
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 330");
-
-    ImGui::StyleColorsDark();
-}
-
-void useTextures()
-{
-    // pass textures to the shader
-    setInt(cube->shaderProgram, "texture1", 0);
-    setInt(cube->shaderProgram, "texture2", 1);
-
-    // Bind textures
-    texture1->bind(GL_TEXTURE0);
-    texture2->bind(GL_TEXTURE1);
-}
-
 void cleanupGL()
 {
     glfwTerminate();
@@ -1363,59 +1423,21 @@ void clearBackground(float r, float g, float b, float a)
 
 void renderScene()
 {
-    clearBackground(0.1f, 0.1f, 0.1f, 1.0f);
+    clearBackground(ui->bgcol[0], ui->bgcol[1], ui->bgcol[2], 1.0f);
 
-    useTextures();
+    ui->beginFrame();
+    
+    ui->debugSetup();
 
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
+    light->lightPos.x = ui->vec3a[0];
+    light->lightPos.y = ui->vec3a[1];
+    light->lightPos.z = ui->vec3a[2];
 
-    ImGui::Begin("Motion");
-        static float rotation = 0.0f;
-        ImGui::SliderFloat("rotation", &rotation, 0, 360); 
+    light->lightCol.x = ui->col1[0];
+    light->lightCol.y = ui->col1[1];
+    light->lightCol.z = ui->col1[2];
 
-        static float rotation_x = 0.0f;
-        ImGui::SliderFloat("rotation_x", &rotation_x, -10.0, 10.0);
-
-        static float rotation_y = 0.0f;
-        ImGui::SliderFloat("rotation_y", &rotation_y,-10.0, 10.0);
-
-        static float rotation_z = 0.0f;
-        ImGui::SliderFloat("rotation_z", &rotation_z, -10.0, 10.0);
-
-        static float translation_x = 1.0f;
-        ImGui::SliderFloat("translation_x", &translation_x, 0.0, 1.0);
-
-        static float translation_y = 1.0f;
-        ImGui::SliderFloat("translation_y", &translation_y, 0.0, 1.0);
-
-        static float translation_z = 1.0f;
-        ImGui::SliderFloat("translation_z", &translation_z, 0.0, 1.0);
-
-        static float shininess = 32.0f;
-        if(gc.sphere){
-            ImGui::SliderFloat("shininess", &sphere->shininess, 1.0, 64.0);
-        }else{
-            ImGui::SliderFloat("shininess", &cube->shininess, 1.0, 64.0);
-        }
-
-        ImGui::Checkbox("Sphere", &gc.sphere);
-        ImGui::Checkbox("Debug", &gc.debug);
-        ImGui::Checkbox("Wireframe", &gc.wireframe);
-
-        static char str0[128];
-        sprintf_s(str0, "Time: %f ms/frame", gc.deltaTime*1000.0f);
-        ImGui::Text(str0);
-    ImGui::End();
-
-    light->lightPos.x = rotation_x;
-    light->lightPos.y = rotation_y;
-    light->lightPos.z = rotation_z;
-
-    light->lightCol.x = translation_x;
-    light->lightCol.y = translation_y;
-    light->lightCol.z = translation_z;
+    // camera.updateOrbitPosition(gc.currentTime, 10.0f);
 
     light->updateLightColors();
 
@@ -1447,18 +1469,14 @@ void renderScene()
     }
 
     light->renderDebugCube();
-
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    ui->render();
 }
 
 int main(void)
 {
     gc.window = initGL();
-    initIMGUI(gc.window);
 
-    texture1 = new Texture("../assets/wood_texture.jpg");
-    texture2 = new Texture("../assets/metallic_texture.jpg");
+    ui = new Ui(gc.window);
 
     world_axes  = new Coordinates();
     grid        = new Grid();
@@ -1466,6 +1484,10 @@ int main(void)
     cube    = new Cube();
     light   = new Light(cube->VBO, cube->EBO);
     sphere  = new Sphere();
+
+    cube->diffuseMap = new Texture("..\\assets\\metallic_texture.jpg", "material.diffuse");
+    cube->specularMap = new Texture("..\\assets\\specular-map.png", "material.specular");
+    cube->emissionMap = new Texture("..\\assets\\emission-map.jpg", "material.emission");
 
     // Render loop
     while(!glfwWindowShouldClose(gc.window))
