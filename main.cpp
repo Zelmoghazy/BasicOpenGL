@@ -580,16 +580,29 @@ struct Light
     glm::mat4 model;
 
     glm::vec3 lightPos;
+    glm::vec3 lightDir;
     glm::vec3 lightCol;
 
     glm::vec3 lightDiffuse;
     glm::vec3 lightAmbient;
     glm::vec3 lightSpecular;
 
+    float lightCutoffAngle = 12.5f;
+    float lightOuterCutoffAngle = 19.5f;
+
+    float lightCutoff = glm::cos(glm::radians(lightCutoffAngle));
+    float lightOuterCutoff = glm::cos(glm::radians(lightOuterCutoffAngle));
+
+    // attenuation
+    float constant = 1.0f;
+    float linear = 0.09f;
+    float quadratic = 0.032f;
+
     Coordinates axes;
 
     Light(GLuint CubeVBO, GLuint CubeEBO) 
         : lightPos(glm::vec3(1.2f, 1.0f, 2.0f)),
+          lightDir(glm::vec3(0.0f, 0.0f, -1.0f)),
           lightCol(glm::vec3(1.0f, 1.0f, 1.0f)),
           lightDiffuse(glm::vec3(0.5f, 0.5f, 0.5f)),
           lightAmbient(glm::vec3(0.2f, 0.2f, 0.2f)),
@@ -913,6 +926,14 @@ struct Cube
         setVec3(shaderProgram, "light.diffuse", light->lightDiffuse);
         setVec3(shaderProgram, "light.ambient", light->lightAmbient);
         setVec3(shaderProgram, "light.specular", light->lightSpecular);
+
+        setFloat(shaderProgram, "light.constant",  light->constant);
+        setFloat(shaderProgram, "light.linear",    light->linear);
+        setFloat(shaderProgram, "light.quadratic", light->quadratic);
+
+        setVec3(shaderProgram, "light.direction", light->lightDir);
+        setFloat(shaderProgram, "light.cutoff", light->lightCutoff);
+        setFloat(shaderProgram, "light.outerCutoff", light->lightOuterCutoff);
 
         // setVec3(shaderProgram, "material.specular", materialSpecular);
         // setVec3(shaderProgram, "material.ambient", materialAmbient);
@@ -1260,7 +1281,7 @@ struct Ui
         ImGui::NewFrame();
     }
 
-    void debugSetup()
+    void debugWindow()
     {
         ImGui::Begin("Debug");
             ImGui::SliderFloat("rotation", &rotation, 0, 360); 
@@ -1269,6 +1290,76 @@ struct Ui
             ImGui::SliderFloat3("lightPos", vec3a, -15.0f, 15.0f);
             ImGui::ColorEdit3("lightCol", col1);
 
+            const char* items[] = { "7", "13", "20", "32", "50", "65", "100", "160", "200", "325", "600", "3250"};
+            static int item_selected_idx = 6;
+
+            const char* combo_preview_value = items[item_selected_idx];
+
+            if (ImGui::BeginCombo("lightAttenuation", combo_preview_value, 0))
+            {
+                for (int n = 0; n < IM_ARRAYSIZE(items); n++)
+                {
+                    const bool is_selected = (item_selected_idx == n);
+                    if (ImGui::Selectable(items[n], is_selected))
+                        item_selected_idx = n;
+                    switch(item_selected_idx)
+                    {
+                        case 0:
+                            light->linear = 0.7f;
+                            light->quadratic = 1.8f;
+                            break;
+                        case 1:
+                            light->linear = 0.35f;
+                            light->quadratic = 0.44f;
+                            break;
+                        case 2:
+                            light->linear = 0.22f;
+                            light->quadratic = 0.20f;
+                            break;
+                        case 3:
+                            light->linear = 0.14f;
+                            light->quadratic = 0.07f;
+                            break;
+                        case 4:
+                            light->linear = 0.09f;
+                            light->quadratic = 0.032f;
+                            break;
+                        case 5:
+                            light->linear = 0.07f;
+                            light->quadratic = 0.017f;
+                            break;
+                        case 6:
+                            light->linear = 0.045f;
+                            light->quadratic = 0.0075f;
+                            break;
+                        case 7:
+                            light->linear = 0.027f;
+                            light->quadratic = 0.0028f;
+                            break;
+                        case 8:
+                            light->linear = 0.022f;
+                            light->quadratic = 0.0019f;
+                            break;    
+                        case 9:
+                            light->linear = 0.014f;
+                            light->quadratic = 0.0007f;
+                            break;   
+                        case 10:
+                            light->linear = 0.007f;
+                            light->quadratic = 0.0002f; 
+                            break;
+                        case 11:
+                            light->linear = 0.0014f;
+                            light->quadratic = 0.000007f; 
+                            break;
+                        default:
+                            break;                                        
+                    }
+                    if (is_selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
             if(gc.sphere){
                 ImGui::SliderFloat("shininess", &sphere->shininess, 1.0, 64.0);
             }else{
@@ -1282,6 +1373,11 @@ struct Ui
             sprintf_s(str0, "Time: %f ms/frame", gc.deltaTime*1000.0f);
             ImGui::Text(str0);
         ImGui::End();
+    }
+
+    void demoWindow()
+    {
+        ImGui::ShowDemoWindow();
     }
 
     void render() 
@@ -1427,7 +1523,8 @@ void renderScene()
 
     ui->beginFrame();
     
-    ui->debugSetup();
+    // ui->demoWindow();
+    ui->debugWindow();
 
     light->lightPos.x = ui->vec3a[0];
     light->lightPos.y = ui->vec3a[1];
