@@ -82,7 +82,8 @@ struct Texture
     std::string uniform;
     int width, height, nrChannels;
 
-    Texture(const std::string& texturePath, const std::string& uniform) : path(texturePath), uniform(uniform), width(0), height(0), nrChannels(0)
+    Texture(const std::string& texturePath, const std::string& uniform) 
+        : path(texturePath), uniform(uniform), width(0), height(0), nrChannels(0)
     {
         // Generate texture ID
         glGenTextures(1, &id);
@@ -575,6 +576,13 @@ struct Light
     GLuint VBO;
     GLuint EBO;
 
+    enum class Type
+    {
+        DIRECTIONAL,
+        POINT,
+        SPOT,
+    };
+
     GLuint shaderProgram;
 
     glm::mat4 model;
@@ -594,8 +602,8 @@ struct Light
     float lightOuterCutoff = glm::cos(glm::radians(lightOuterCutoffAngle));
 
     // attenuation
-    float constant = 1.0f;
-    float linear = 0.09f;
+    float constant  = 1.0f;
+    float linear    = 0.09f;
     float quadratic = 0.032f;
 
     Coordinates axes;
@@ -694,6 +702,9 @@ struct Light
 };
 
 Light *light;
+Light *dirLight;
+Light *pointLight[4];
+Light *spotLight;
 
 struct Cube
 {
@@ -922,18 +933,38 @@ struct Cube
 
         setVec3(shaderProgram, "viewPos", camera.pos);
 
-        setVec3(shaderProgram, "light.position", light->lightPos);
-        setVec3(shaderProgram, "light.diffuse", light->lightDiffuse);
-        setVec3(shaderProgram, "light.ambient", light->lightAmbient);
-        setVec3(shaderProgram, "light.specular", light->lightSpecular);
+        // directional light
+        setVec3(shaderProgram, "dirLight.direction",    dirLight->lightPos);
+        setVec3(shaderProgram, "dirLight.ambient",      glm::vec3(0.05f, 0.05f, 0.05f));
+        setVec3(shaderProgram, "dirLight.diffuse",      glm::vec3(0.4f, 0.4f, 0.4f));
+        setVec3(shaderProgram, "dirLight.specular",     glm::vec3(0.5f, 0.5f, 0.5f));
 
-        setFloat(shaderProgram, "light.constant",  light->constant);
-        setFloat(shaderProgram, "light.linear",    light->linear);
-        setFloat(shaderProgram, "light.quadratic", light->quadratic);
+        for (int i = 0; i < 4; i++) 
+        {
+            std::string base = "pointLights[" + std::to_string(i) + "].";
+            
+            setVec3(shaderProgram, base + "position",   pointLight[i]->lightPos);
+            setVec3(shaderProgram, base + "ambient",    pointLight[i]->lightAmbient);
+            setVec3(shaderProgram, base + "diffuse",    pointLight[i]->lightDiffuse);
+            setVec3(shaderProgram, base + "specular",   pointLight[i]->lightSpecular);
 
-        setVec3(shaderProgram, "light.direction", light->lightDir);
-        setFloat(shaderProgram, "light.cutoff", light->lightCutoff);
-        setFloat(shaderProgram, "light.outerCutoff", light->lightOuterCutoff);
+            setFloat(shaderProgram, base + "constant",  pointLight[i]->constant);
+            setFloat(shaderProgram, base + "linear",    pointLight[i]->linear);
+            setFloat(shaderProgram, base + "quadratic", pointLight[i]->quadratic);
+        }
+
+        setVec3(shaderProgram, "spotLight.position",    camera.pos);
+        setVec3(shaderProgram, "spotLight.direction",   camera.front);
+        setVec3(shaderProgram, "spotLight.diffuse",     spotLight->lightDiffuse);
+        setVec3(shaderProgram, "spotLight.ambient",     spotLight->lightAmbient);
+        setVec3(shaderProgram, "spotLight.specular",    spotLight->lightSpecular);
+
+        setFloat(shaderProgram, "spotLight.constant",   spotLight->constant);
+        setFloat(shaderProgram, "spotLight.linear",     spotLight->linear);
+        setFloat(shaderProgram, "spotLight.quadratic",  spotLight->quadratic);
+
+        setFloat(shaderProgram, "spotLight.cutoff",      spotLight->lightCutoff);
+        setFloat(shaderProgram, "spotLight.outerCutoff", spotLight->lightOuterCutoff);
 
         // setVec3(shaderProgram, "material.specular", materialSpecular);
         // setVec3(shaderProgram, "material.ambient", materialAmbient);
@@ -1258,6 +1289,12 @@ struct Ui
     float rotation = 0.0f;
     float vec3a[3] = { 1.0f, 1.0f, 1.0f};
     float col1[3] = { 1.0f, 1.0f, 1.0f };
+
+    float pcol[4][3] = {{ 1.0f, 1.0f, 1.0f},
+                        { 1.0f, 1.0f, 1.0f},
+                        { 1.0f, 1.0f, 1.0f},
+                        { 1.0f, 1.0f, 1.0f}};
+
     float bgcol[3] = { 0.0f, 0.0f, 0.0f };
     float shininess = 32.0f;
     char str0[128];
@@ -1267,11 +1304,103 @@ struct Ui
         /* IMGUI Stuff */
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        // ImGuiIO &io = ImGui::GetIO();
+
+        ImGuiIO &io = ImGui::GetIO(); (void) io;
+
+        // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       // Enable Keyboard Controls
+        // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+        // io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;           // Enable Docking
+        // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         // Enable Multi-Viewport / Platform Windows
+
         ImGui_ImplGlfw_InitForOpenGL(window, true);
         ImGui_ImplOpenGL3_Init("#version 330");
 
-        ImGui::StyleColorsDark();
+        //ImGui::StyleColorsDark();
+        DarkTheme();
+    }
+
+    void DarkTheme()
+    {
+        ImVec4 *colors = ImGui::GetStyle().Colors;
+        colors[ImGuiCol_Text] = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
+        colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+        colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
+        colors[ImGuiCol_ChildBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+        colors[ImGuiCol_PopupBg] = ImVec4(0.19f, 0.19f, 0.19f, 0.92f);
+        colors[ImGuiCol_Border] = ImVec4(0.19f, 0.19f, 0.19f, 0.29f);
+        colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.24f);
+        colors[ImGuiCol_FrameBg] = ImVec4(0.05f, 0.05f, 0.05f, 0.54f);
+        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.19f, 0.19f, 0.19f, 0.54f);
+        colors[ImGuiCol_FrameBgActive] = ImVec4(0.20f, 0.22f, 0.23f, 1.00f);
+        colors[ImGuiCol_TitleBg] = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
+        colors[ImGuiCol_TitleBgActive] = ImVec4(0.06f, 0.06f, 0.06f, 1.00f);
+        colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
+        colors[ImGuiCol_MenuBarBg] = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
+        colors[ImGuiCol_ScrollbarBg] = ImVec4(0.05f, 0.05f, 0.05f, 0.54f);
+        colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.34f, 0.34f, 0.34f, 0.54f);
+        colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.40f, 0.40f, 0.40f, 0.54f);
+        colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.56f, 0.56f, 0.56f, 0.54f);
+        colors[ImGuiCol_CheckMark] = ImVec4(0.33f, 0.67f, 0.86f, 1.00f);
+        colors[ImGuiCol_SliderGrab] = ImVec4(0.34f, 0.34f, 0.34f, 0.54f);
+        colors[ImGuiCol_SliderGrabActive] = ImVec4(0.56f, 0.56f, 0.56f, 0.54f);
+        colors[ImGuiCol_Button] = ImVec4(0.05f, 0.05f, 0.05f, 0.54f);
+        colors[ImGuiCol_ButtonHovered] = ImVec4(0.19f, 0.19f, 0.19f, 0.54f);
+        colors[ImGuiCol_ButtonActive] = ImVec4(0.20f, 0.22f, 0.23f, 1.00f);
+        colors[ImGuiCol_Header] = ImVec4(0.00f, 0.00f, 0.00f, 0.52f);
+        colors[ImGuiCol_HeaderHovered] = ImVec4(0.00f, 0.00f, 0.00f, 0.36f);
+        colors[ImGuiCol_HeaderActive] = ImVec4(0.20f, 0.22f, 0.23f, 0.33f);
+        colors[ImGuiCol_Separator] = ImVec4(0.28f, 0.28f, 0.28f, 0.29f);
+        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.44f, 0.44f, 0.44f, 0.29f);
+        colors[ImGuiCol_SeparatorActive] = ImVec4(0.40f, 0.44f, 0.47f, 1.00f);
+        colors[ImGuiCol_ResizeGrip] = ImVec4(0.28f, 0.28f, 0.28f, 0.29f);
+        colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.44f, 0.44f, 0.44f, 0.29f);
+        colors[ImGuiCol_ResizeGripActive] = ImVec4(0.40f, 0.44f, 0.47f, 1.00f);
+        colors[ImGuiCol_Tab] = ImVec4(0.00f, 0.00f, 0.00f, 0.52f);
+        colors[ImGuiCol_TabHovered] = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
+        colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.20f, 0.20f, 0.36f);
+        colors[ImGuiCol_TabUnfocused] = ImVec4(0.00f, 0.00f, 0.00f, 0.52f);
+        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
+        // colors[ImGuiCol_DockingPreview] = ImVec4(0.33f, 0.67f, 0.86f, 1.00f);
+        // colors[ImGuiCol_DockingEmptyBg] = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
+        colors[ImGuiCol_PlotLines] = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
+        colors[ImGuiCol_PlotLinesHovered] = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
+        colors[ImGuiCol_PlotHistogram] = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
+        colors[ImGuiCol_PlotHistogramHovered] = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
+        colors[ImGuiCol_TableHeaderBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.52f);
+        colors[ImGuiCol_TableBorderStrong] = ImVec4(0.00f, 0.00f, 0.00f, 0.52f);
+        colors[ImGuiCol_TableBorderLight] = ImVec4(0.28f, 0.28f, 0.28f, 0.29f);
+        colors[ImGuiCol_TableRowBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+        colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.00f, 1.00f, 1.00f, 0.06f);
+        colors[ImGuiCol_TextSelectedBg] = ImVec4(0.20f, 0.22f, 0.23f, 1.00f);
+        colors[ImGuiCol_DragDropTarget] = ImVec4(0.33f, 0.67f, 0.86f, 1.00f);
+        colors[ImGuiCol_NavHighlight] = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
+        colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 0.00f, 0.00f, 0.70f);
+        colors[ImGuiCol_NavWindowingDimBg] = ImVec4(1.00f, 0.00f, 0.00f, 0.20f);
+        colors[ImGuiCol_ModalWindowDimBg] = ImVec4(1.00f, 0.00f, 0.00f, 0.35f);
+
+        ImGuiStyle &style = ImGui::GetStyle();
+        style.WindowPadding = ImVec2(8.00f, 8.00f);
+        style.FramePadding = ImVec2(5.00f, 2.00f);
+        style.CellPadding = ImVec2(6.00f, 6.00f);
+        style.ItemSpacing = ImVec2(6.00f, 6.00f);
+        style.ItemInnerSpacing = ImVec2(6.00f, 6.00f);
+        style.TouchExtraPadding = ImVec2(0.00f, 0.00f);
+        style.IndentSpacing = 25;
+        style.ScrollbarSize = 15;
+        style.GrabMinSize = 10;
+        style.WindowBorderSize = 1;
+        style.ChildBorderSize = 1;
+        style.PopupBorderSize = 1;
+        style.FrameBorderSize = 1;
+        style.TabBorderSize = 1;
+        style.WindowRounding = 7;
+        style.ChildRounding = 4;
+        style.FrameRounding = 3;
+        style.PopupRounding = 4;
+        style.ScrollbarRounding = 9;
+        style.GrabRounding = 3;
+        style.LogSliderDeadzone = 4;
+        style.TabRounding = 4;
     }
 
     void beginFrame() 
@@ -1289,6 +1418,10 @@ struct Ui
 
             ImGui::SliderFloat3("lightPos", vec3a, -15.0f, 15.0f);
             ImGui::ColorEdit3("lightCol", col1);
+
+            for (int i = 0; i < 4; i++) 
+                ImGui::ColorEdit3(("PointCol" + std::to_string(i)).c_str(), pcol[i]);
+
 
             const char* items[] = { "7", "13", "20", "32", "50", "65", "100", "160", "200", "325", "600", "3250"};
             static int item_selected_idx = 6;
@@ -1533,10 +1666,18 @@ void renderScene()
     light->lightCol.x = ui->col1[0];
     light->lightCol.y = ui->col1[1];
     light->lightCol.z = ui->col1[2];
+    light->updateLightColors();
+
+    for (int i = 0; i < 4; i++) 
+    {
+        pointLight[i]->lightCol.x = ui->pcol[i][0];
+        pointLight[i]->lightCol.y = ui->pcol[i][1];
+        pointLight[i]->lightCol.z = ui->pcol[i][2];
+        pointLight[i]->updateLightColors();
+    }
 
     // camera.updateOrbitPosition(gc.currentTime, 10.0f);
 
-    light->updateLightColors();
 
     if(gc.debug)
     {
@@ -1561,11 +1702,15 @@ void renderScene()
 
     if(gc.sphere){
         sphere->render();
+        light->renderDebugCube();
     }else{
         cube->render();
+        for (int i = 0; i < 4; i++) 
+        {
+            pointLight[i]->renderDebugCube();
+        }
     }
 
-    light->renderDebugCube();
     ui->render();
 }
 
@@ -1579,10 +1724,28 @@ int main(void)
     grid        = new Grid();
 
     cube    = new Cube();
-    light   = new Light(cube->VBO, cube->EBO);
     sphere  = new Sphere();
+    light   = new Light(cube->VBO, cube->EBO);
 
-    cube->diffuseMap = new Texture("..\\assets\\metallic_texture.jpg", "material.diffuse");
+    dirLight    = new Light(cube->VBO, cube->EBO);
+    dirLight->lightPos = glm::vec3(-0.2f, -1.0f, -0.3f); 
+
+    glm::vec3 pointLightPositions[] = {
+        glm::vec3( 0.7f,  0.2f,  2.0f),
+        glm::vec3( 2.3f, -3.3f, -4.0f),
+        glm::vec3(-4.0f,  2.0f, -12.0f),
+        glm::vec3( 0.0f,  0.0f, -3.0f)
+    };
+
+    for(size_t i = 0; i < 4 ; i++)
+    {
+        pointLight[i] = new Light(cube->VBO, cube->EBO);
+        pointLight[i]->lightPos = pointLightPositions[i];
+    }
+
+    spotLight  = new Light(cube->VBO, cube->EBO);
+
+    cube->diffuseMap  = new Texture("..\\assets\\metallic_texture.jpg", "material.diffuse");
     cube->specularMap = new Texture("..\\assets\\specular-map.png", "material.specular");
     cube->emissionMap = new Texture("..\\assets\\emission-map.jpg", "material.emission");
 
