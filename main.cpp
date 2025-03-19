@@ -9,6 +9,10 @@
 #include <GLM/gtc/matrix_transform.hpp>
 #include <GLM/gtc/type_ptr.hpp>
 
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -48,8 +52,9 @@ struct Color4
 
 struct Vertex 
 {
-    Vec4 pos;
-    Color4 color;
+    glm::vec3 Position;
+    glm::vec3 Normal;
+    glm::vec2 TexCoords;
 };
 
 struct global_context 
@@ -80,10 +85,22 @@ struct Texture
     GLuint id;
     std::string path;
     std::string uniform;
+    std::string type;
     int width, height, nrChannels;
 
     Texture(const std::string& texturePath, const std::string& uniform) 
         : path(texturePath), uniform(uniform), width(0), height(0), nrChannels(0)
+    {
+        (void)textureFromFile();
+    }    
+
+    Texture(const std::string& texturePath) 
+        : path(texturePath), width(0), height(0), nrChannels(0)
+    {
+        (void)textureFromFile();
+    }
+
+    GLuint textureFromFile()
     {
         // Generate texture ID
         glGenTextures(1, &id);
@@ -108,6 +125,8 @@ struct Texture
             std::cerr << "Failed to load texture: " << path << std::endl;
         }
         stbi_image_free(data);
+
+        return id;
     }
 
     void bind(GLenum textureUnit = GL_TEXTURE0) const 
@@ -127,6 +146,81 @@ struct Texture
     ~Texture() 
     {
         glDeleteTextures(1, &id);
+    }
+};
+
+struct Mesh
+{
+    GLuint VAO, VBO, EBO;
+
+    // mesh data
+    std::vector<Vertex>       vertices;
+    std::vector<GLuint>       indices;
+    std::vector<Texture>      textures;
+
+    Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures)
+        : vertices(std::move(vertices))
+        , indices(std::move(indices))
+        , textures(std::move(textures))
+    {
+        setupMesh();
+    }
+
+    void setupMesh()
+    {
+        glGenVertexArrays(1, &VAO);
+        glGenBuffers(1, &VBO);
+        glGenBuffers(1, &EBO);
+
+        glBindVertexArray(VAO);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), &vertices[0], GL_STATIC_DRAW);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), 
+                     &indices[0], GL_STATIC_DRAW);
+
+        // vertex positions
+        glEnableVertexAttribArray(0);   
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+        // vertex normals
+        glEnableVertexAttribArray(1);   
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, Normal));
+        // vertex texture coords
+        glEnableVertexAttribArray(2);   
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, TexCoords));
+
+        glBindVertexArray(0);
+    }
+
+    void render(GLuint shaderProgram)
+    {
+        unsigned int diffuseNr  = 1;
+        unsigned int specularNr = 1;
+        unsigned int normalNr   = 1;
+        unsigned int heightNr   = 1;
+
+        for(unsigned int i = 0; i < textures.size(); i++)
+        {
+            // retrieve texture number (the N in diffuse_textureN)
+            std::string number;
+            std::string name = textures[i].type;
+            if(name == "texture_diffuse")
+                number = std::to_string(diffuseNr++);
+            else if(name == "texture_specular")
+                number = std::to_string(specularNr++);
+
+            textures[i].uniform = ("material." + name + number);
+            textures[i].useTextures(shaderProgram,  i);
+        }
+        // draw mesh
+        glBindVertexArray(VAO);
+        glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
+        glBindVertexArray(0);
+
+        glActiveTexture(GL_TEXTURE0);
     }
 };
 
@@ -570,18 +664,20 @@ struct Grid
 };
 Grid *grid;
 
+enum class LightType
+{
+    DIRECTIONAL,
+    POINT,
+    SPOT
+};
+
 struct Light
 {
     GLuint VAO;
     GLuint VBO;
     GLuint EBO;
 
-    enum class Type
-    {
-        DIRECTIONAL,
-        POINT,
-        SPOT,
-    };
+    LightType type;
 
     GLuint shaderProgram;
 
@@ -608,19 +704,25 @@ struct Light
 
     Coordinates axes;
 
-    Light(GLuint CubeVBO, GLuint CubeEBO) 
+    Light(GLuint VBO, GLuint EBO) 
         : lightPos(glm::vec3(1.2f, 1.0f, 2.0f)),
           lightDir(glm::vec3(0.0f, 0.0f, -1.0f)),
           lightCol(glm::vec3(1.0f, 1.0f, 1.0f)),
           lightDiffuse(glm::vec3(0.5f, 0.5f, 0.5f)),
           lightAmbient(glm::vec3(0.2f, 0.2f, 0.2f)),
-          lightSpecular(glm::vec3(1.0f, 1.0f, 1.0f)),
-          VBO(CubeVBO),
-          EBO(CubeEBO)
+          lightSpecular(glm::vec3(0.5f, 0.5f, 0.5f)),
+          VBO(VBO),
+          EBO(EBO)
     {
         positionDebugCube();   
         setupDebugCube();
         initShaders();
+    }
+
+    Light(GLuint VBO, GLuint EBO, LightType t)
+    {
+        type = t;
+        Light(VBO,EBO);
     }
 
     ~Light() 
@@ -705,6 +807,211 @@ Light *light;
 Light *dirLight;
 Light *pointLight[4];
 Light *spotLight;
+
+struct Model
+{
+    std::vector<Texture>     textures_loaded;
+    std::vector<Mesh>        meshes;
+    std::string              directory;
+
+    GLuint                   shaderProgram;
+    bool                     gammaCorrection;
+
+
+    Model(std::string const &path, bool gamma = false) : gammaCorrection(gamma)
+    {
+        initShaders();
+        loadModel(path);
+    }
+
+    void render()
+    {
+        glUseProgram(shaderProgram);
+
+        // view/projection transformations
+        glm::mat4 projection = camera.getProjectionMatrix();
+        glm::mat4 view = camera.getViewMatrix();
+        setMat4(shaderProgram, "projection", projection);
+        setMat4(shaderProgram, "view", view);
+
+        // render the loaded model
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, glm::vec3(0.0f, 0.0f, 0.0f)); // translate it down so it's at the center of the scene
+        model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f)); // it's a bit too big for our scene, so scale it down
+        setMat4(shaderProgram, "model", model);
+
+        // Just draw all the meshes
+        for(unsigned int i = 0; i < meshes.size(); i++)
+            meshes[i].render(shaderProgram);
+    }
+    void initShaders()
+    {
+        // Load and compile shaders
+        std::string vertexSource   = readShaderSource("../shaders/model_vs.glsl");
+        std::string fragmentSource = readShaderSource("../shaders/model_fs.glsl");
+        shaderProgram              = createShaderProgram(vertexSource, fragmentSource);
+    }
+
+    void updateShaders()
+    {
+        glDeleteProgram(shaderProgram);
+        initShaders();
+    }
+
+
+    void loadModel(std::string const &path)
+    {
+        // read file
+        Assimp::Importer importer;
+        const aiScene *scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
+
+        // check errors
+        if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) 
+        {
+            std::cout << "ERROR::ASSIMP::" << importer.GetErrorString() << std::endl;
+            return;
+        }
+        // get the directory of the filepath and assuming everything exist there
+        directory = path.substr(0, path.find_last_of('/')); 
+
+        // process root node recursively
+        processNode(scene->mRootNode, scene);
+    }
+
+
+    // Process each mesh located at the nodes and all of its children
+    void processNode(aiNode *node, const aiScene *scene)
+    {
+        // process all the node's meshes (if any)
+        for(unsigned int i = 0; i < node->mNumMeshes; i++)
+        {
+            aiMesh *mesh = scene->mMeshes[node->mMeshes[i]]; 
+            meshes.push_back(processMesh(mesh, scene));         
+        }
+
+        // then do the same for each of its children
+        for(unsigned int i = 0; i < node->mNumChildren; i++)
+        {
+            processNode(node->mChildren[i], scene);
+        }
+    }
+
+    Mesh processMesh(aiMesh *mesh, const aiScene *scene)
+    {
+        std::vector<Vertex>          vertices;
+        std::vector<unsigned int>    indices;
+        std::vector<Texture>         textures;
+
+        // for all mesh vertices
+        for(unsigned int i = 0; i < mesh->mNumVertices; i++)
+        {
+            Vertex vertex;
+            glm::vec3 vector; 
+
+            // process vertex positions
+            vector.x = mesh->mVertices[i].x;
+            vector.y = mesh->mVertices[i].y;
+            vector.z = mesh->mVertices[i].z; 
+            vertex.Position = vector;
+
+            // process vertex normals 
+            if(mesh->HasNormals()){
+                vector.x = mesh->mNormals[i].x;
+                vector.y = mesh->mNormals[i].y;
+                vector.z = mesh->mNormals[i].z;
+                vertex.Normal = vector; 
+            }
+
+            // process vertex texture coordinates
+            if(mesh->mTextureCoords[0]) // does the mesh contain texture coordinates?
+            {
+                glm::vec2 vec;
+                // a vertex can contain up to 8 different texture coordinates.
+                // We thus make the assumption that we won't use models where a vertex 
+                // can have multiple texture coordinates so we always take the first set (0).
+                vec.x = mesh->mTextureCoords[0][i].x; 
+                vec.y = mesh->mTextureCoords[0][i].y;
+                vertex.TexCoords = vec;
+            }
+            else
+            {
+                vertex.TexCoords = glm::vec2(0.0f, 0.0f); 
+            }
+
+            vertices.push_back(vertex);
+        }
+
+        // process indices
+        // for each of the mesh's faces (a face is a mesh its triangle), retrieve the corresponding vertex indices.
+        for(size_t i = 0; i < mesh->mNumFaces; i++)
+        {
+            aiFace face = mesh->mFaces[i];
+            // retrieve all face indices
+            for(unsigned int j = 0; j < face.mNumIndices; j++)
+                indices.push_back(face.mIndices[j]);
+        } 
+
+        // process material
+        if(mesh->mMaterialIndex >= 0)
+        {
+            aiMaterial *material = scene->mMaterials[mesh->mMaterialIndex];
+
+            // 1. diffuse maps
+            std::vector<Texture> diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
+            textures.insert(textures.end(), diffuseMaps.begin(), diffuseMaps.end());
+            // 2. specular maps
+            std::vector<Texture> specularMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_specular");
+            textures.insert(textures.end(), specularMaps.begin(), specularMaps.end());
+            // 3. normal maps
+            std::vector<Texture> normalMaps = loadMaterialTextures(material, aiTextureType_HEIGHT, "texture_normal");
+            textures.insert(textures.end(), normalMaps.begin(), normalMaps.end());
+            // 4. height maps
+            std::vector<Texture> heightMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_height");
+            textures.insert(textures.end(), heightMaps.begin(), heightMaps.end());
+        }
+
+        return Mesh(vertices, indices, textures);
+
+    }
+
+    // checks all material textures of a given type and loads the textures if they're not loaded yet.
+    // the required info is returned as a Texture struct.
+    std::vector<Texture> loadMaterialTextures(aiMaterial *mat, aiTextureType type, std::string typeName)
+    {
+        std::vector<Texture> textures;
+        for(unsigned int i = 0; i < mat->GetTextureCount(type); i++)
+        {
+            aiString str;
+            mat->GetTexture(type, i, &str);
+
+            bool skip = false;
+
+            for(unsigned int j = 0; j < textures_loaded.size(); j++)
+            {
+                if(std::strcmp(textures_loaded[j].path.data(), str.C_Str()) == 0)
+                {
+                    textures.push_back(textures_loaded[j]);
+                    skip = true; 
+                    // a texture with the same filepath has already been loaded, continue to next one. (optimization)
+                    break;
+                }
+            }
+            if(!skip)
+            {
+                std::string filename = std::string(str.C_Str());
+                filename = directory + '/' + filename;
+
+                Texture texture(filename);
+                texture.type = typeName;
+                texture.path = filename;
+                textures.push_back(texture);
+                textures_loaded.push_back(texture);  // store it as texture loaded for entire model, to ensure we won't unnecessary load duplicate textures.
+            }
+        }
+        return textures;
+    }
+};
+Model *model;
 
 struct Cube
 {
@@ -875,8 +1182,9 @@ struct Cube
         glEnableVertexAttribArray(3);
 
         // UNBIND
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); 
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
     void positionCube(int idx)
@@ -935,9 +1243,9 @@ struct Cube
 
         // directional light
         setVec3(shaderProgram, "dirLight.direction",    dirLight->lightPos);
-        setVec3(shaderProgram, "dirLight.ambient",      glm::vec3(0.05f, 0.05f, 0.05f));
-        setVec3(shaderProgram, "dirLight.diffuse",      glm::vec3(0.4f, 0.4f, 0.4f));
-        setVec3(shaderProgram, "dirLight.specular",     glm::vec3(0.5f, 0.5f, 0.5f));
+        setVec3(shaderProgram, "dirLight.ambient",      dirLight->lightAmbient);
+        setVec3(shaderProgram, "dirLight.diffuse",      dirLight->lightDiffuse);
+        setVec3(shaderProgram, "dirLight.specular",     dirLight->lightSpecular);
 
         for (int i = 0; i < 4; i++) 
         {
@@ -1283,13 +1591,12 @@ struct Sphere
 
 Sphere *sphere;
 
-
 struct Ui
 {
     float rotation = 0.0f;
     float vec3a[3] = { 1.0f, 1.0f, 1.0f};
     float col1[3] = { 1.0f, 1.0f, 1.0f };
-
+    float dircol[3] = { 1.0f, 1.0f, 1.0f };
     float pcol[4][3] = {{ 1.0f, 1.0f, 1.0f},
                         { 1.0f, 1.0f, 1.0f},
                         { 1.0f, 1.0f, 1.0f},
@@ -1418,10 +1725,10 @@ struct Ui
 
             ImGui::SliderFloat3("lightPos", vec3a, -15.0f, 15.0f);
             ImGui::ColorEdit3("lightCol", col1);
+            ImGui::ColorEdit3("dirCol", dircol);
 
             for (int i = 0; i < 4; i++) 
                 ImGui::ColorEdit3(("PointCol" + std::to_string(i)).c_str(), pcol[i]);
-
 
             const char* items[] = { "7", "13", "20", "32", "50", "65", "100", "160", "200", "325", "600", "3250"};
             static int item_selected_idx = 6;
@@ -1493,6 +1800,7 @@ struct Ui
                 }
                 ImGui::EndCombo();
             }
+
             if(gc.sphere){
                 ImGui::SliderFloat("shininess", &sphere->shininess, 1.0, 64.0);
             }else{
@@ -1659,7 +1967,7 @@ void renderScene()
     // ui->demoWindow();
     ui->debugWindow();
 
-    light->lightPos.x = ui->vec3a[0];
+/*    light->lightPos.x = ui->vec3a[0];
     light->lightPos.y = ui->vec3a[1];
     light->lightPos.z = ui->vec3a[2];
 
@@ -1676,14 +1984,18 @@ void renderScene()
         pointLight[i]->updateLightColors();
     }
 
-    // camera.updateOrbitPosition(gc.currentTime, 10.0f);
+    dirLight->lightCol.x = ui->dircol[0];
+    dirLight->lightCol.y = ui->dircol[1];
+    dirLight->lightCol.z = ui->dircol[2];
+    dirLight->updateLightColors();
 
+    // camera.updateOrbitPosition(gc.currentTime, 10.0f);
 
     if(gc.debug)
     {
         world_axes->render();
         grid->render();
-    }
+    }*/
 
     static bool set = false;
     if(gc.wireframe)
@@ -1700,7 +2012,9 @@ void renderScene()
         }
     }
 
-    if(gc.sphere){
+    model->render();
+
+/*    if(gc.sphere){
         sphere->render();
         light->renderDebugCube();
     }else{
@@ -1710,7 +2024,7 @@ void renderScene()
             pointLight[i]->renderDebugCube();
         }
     }
-
+*/
     ui->render();
 }
 
@@ -1723,11 +2037,14 @@ int main(void)
     world_axes  = new Coordinates();
     grid        = new Grid();
 
-    cube    = new Cube();
-    sphere  = new Sphere();
-    light   = new Light(cube->VBO, cube->EBO);
+    cube     = new Cube();
+    sphere   = new Sphere();
+    model    = new Model("../assets/backpack/backpack.obj");
 
-    dirLight    = new Light(cube->VBO, cube->EBO);
+
+    light    = new Light(cube->VBO, cube->EBO);
+
+    dirLight = new Light(cube->VBO, cube->EBO);
     dirLight->lightPos = glm::vec3(-0.2f, -1.0f, -0.3f); 
 
     glm::vec3 pointLightPositions[] = {
