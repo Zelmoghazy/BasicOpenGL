@@ -80,6 +80,7 @@ struct global_context
     bool        debug; 
     bool        wireframe;
     bool        sphere;
+    bool        model;
 
     bool        firstMouse      = true;
     float       mouseX          = 0;
@@ -876,33 +877,96 @@ struct Model
     GLuint                   shaderProgram;
     bool                     gammaCorrection;
 
-    Model(std::string const &path, bool gamma = false) : gammaCorrection(gamma)
+    glm::vec3                modelPos;
+
+    glm::mat4                model;
+
+    Coordinates              axes;
+
+    float shininess = 32.0f;
+
+    Model(std::string const &path, bool gamma = false) 
+        : gammaCorrection(gamma), modelPos(glm::vec3(0.0f, 0.0f, 0.0f))
     {
-        initShaders();
+        positionModel();
         loadModel(path);
+        initShaders();
     }
 
     void render()
     {
+        positionModel();
+
+        if(gc.debug)
+        {
+            renderDebugAxes();
+        }
+
         glUseProgram(shaderProgram);
 
+        // Pass uniform variables to the shader
+        setFloat(shaderProgram, "iTime", gc.currentTime);
+        setFloat2(shaderProgram,"iResolution", (float)gc.width, (float)gc.height);
+
+        setVec3(shaderProgram, "viewPos", camera.pos);
+
+        // directional light
+        setVec3(shaderProgram, "dirLight.direction",    dirLight->lightPos);
+        setVec3(shaderProgram, "dirLight.ambient",      dirLight->lightAmbient);
+        setVec3(shaderProgram, "dirLight.diffuse",      dirLight->lightDiffuse);
+        setVec3(shaderProgram, "dirLight.specular",     dirLight->lightSpecular);
+
+        for (int i = 0; i < 4; i++) 
+        {
+            std::string base = "pointLights[" + std::to_string(i) + "].";
+            
+            setVec3(shaderProgram, base + "position",   pointLight[i]->lightPos);
+            setVec3(shaderProgram, base + "ambient",    pointLight[i]->lightAmbient);
+            setVec3(shaderProgram, base + "diffuse",    pointLight[i]->lightDiffuse);
+            setVec3(shaderProgram, base + "specular",   pointLight[i]->lightSpecular);
+
+            setFloat(shaderProgram, base + "constant",  pointLight[i]->constant);
+            setFloat(shaderProgram, base + "linear",    pointLight[i]->linear);
+            setFloat(shaderProgram, base + "quadratic", pointLight[i]->quadratic);
+        }
+
+        setVec3(shaderProgram, "spotLight.position",    camera.pos);
+        setVec3(shaderProgram, "spotLight.direction",   camera.front);
+        setVec3(shaderProgram, "spotLight.diffuse",     spotLight->lightDiffuse);
+        setVec3(shaderProgram, "spotLight.ambient",     spotLight->lightAmbient);
+        setVec3(shaderProgram, "spotLight.specular",    spotLight->lightSpecular);
+
+        setFloat(shaderProgram, "spotLight.constant",   spotLight->constant);
+        setFloat(shaderProgram, "spotLight.linear",     spotLight->linear);
+        setFloat(shaderProgram, "spotLight.quadratic",  spotLight->quadratic);
+
+        setFloat(shaderProgram, "spotLight.cutoff",      spotLight->lightCutoff);
+        setFloat(shaderProgram, "spotLight.outerCutoff", spotLight->lightOuterCutoff);
+
         // view/projection transformations
-        glm::mat4 projection = camera.getProjectionMatrix();
-        glm::mat4 view       = camera.getViewMatrix();
-
-        setMat4(shaderProgram, "projection", projection);
-        setMat4(shaderProgram, "view", view);
-
-        // render the loaded model
-        glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, glm::vec3(0.0f, 0.0f, 0.0f)); 
-        model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f));     
         setMat4(shaderProgram, "model", model);
+        setMat4(shaderProgram, "projection", camera.getProjectionMatrix());
+        setMat4(shaderProgram, "view", camera.getViewMatrix());
+
+        setFloat(shaderProgram, "material.shininess", shininess);
 
         // Just draw all the meshes
         for(unsigned int i = 0; i < meshes.size(); i++){
             meshes[i].render(shaderProgram);
         }
+    }
+
+    void renderDebugAxes()
+    {
+        axes.model = model;
+        axes.render(); 
+    }
+
+    void positionModel()
+    {
+        model = glm::mat4(1.0f);
+        model = glm::translate(model, modelPos);
+        model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f));  
     }
 
     void initShaders()
@@ -1669,10 +1733,17 @@ Sphere *sphere;
 struct Ui
 {
     float rotation = 0.0f;
+
     float vec3a[3] = { 1.0f, 1.0f, 1.0f};
     float col1[3] = { 1.0f, 1.0f, 1.0f };
+
     float dircol[3] = { 1.0f, 1.0f, 1.0f };
+
     float pcol[4][3] = {{ 1.0f, 1.0f, 1.0f},
+                        { 1.0f, 1.0f, 1.0f},
+                        { 1.0f, 1.0f, 1.0f},
+                        { 1.0f, 1.0f, 1.0f}};    
+    float ppos[4][3] = {{ 1.0f, 1.0f, 1.0f},
                         { 1.0f, 1.0f, 1.0f},
                         { 1.0f, 1.0f, 1.0f},
                         { 1.0f, 1.0f, 1.0f}};
@@ -1801,9 +1872,11 @@ struct Ui
             ImGui::SliderFloat3("lightPos", vec3a, -15.0f, 15.0f);
             ImGui::ColorEdit3("lightCol", col1);
             ImGui::ColorEdit3("dirCol", dircol);
-#if 0
-            for (int i = 0; i < 4; i++) 
+
+            for (int i = 0; i < 4; i++){
                 ImGui::ColorEdit3(("PointCol" + std::to_string(i)).c_str(), pcol[i]);
+                ImGui::SliderFloat3(("PointPos" + std::to_string(i)).c_str(), ppos[i], -15.0f, 15.0f);
+            } 
 
             const char* items[] = { "7", "13", "20", "32", "50", "65", "100", "160", "200", "325", "600", "3250"};
             static int item_selected_idx = 6;
@@ -1876,19 +1949,22 @@ struct Ui
                 ImGui::EndCombo();
             }
 
-            if(gc.sphere){
-                ImGui::SliderFloat("shininess", &sphere->shininess, 1.0, 64.0);
-            }else{
-                ImGui::SliderFloat("shininess", &cube->shininess, 1.0, 64.0);
+            if(!gc.model)
+            {
+                if(gc.sphere){
+                    ImGui::SliderFloat("shininess", &sphere->shininess, 1.0, 64.0);
+                }else{
+                    ImGui::SliderFloat("shininess", &cube->shininess, 1.0, 64.0);
+                }
             }
 
             ImGui::Checkbox("Sphere", &gc.sphere);
+            ImGui::Checkbox("Model", &gc.model);
             ImGui::Checkbox("Debug", &gc.debug);
             ImGui::Checkbox("Wireframe", &gc.wireframe);
 
             sprintf_s(str0, "Time: %f ms/frame", gc.deltaTime*1000.0f);
             ImGui::Text(str0);
-#endif
         ImGui::End();
     }
 
@@ -2044,7 +2120,7 @@ void renderScene()
     // ui->demoWindow();
     ui->debugWindow();
 
-/*    light->lightPos.x = ui->vec3a[0];
+    light->lightPos.x = ui->vec3a[0];
     light->lightPos.y = ui->vec3a[1];
     light->lightPos.z = ui->vec3a[2];
 
@@ -2057,8 +2133,12 @@ void renderScene()
     {
         pointLight[i]->lightCol.x = ui->pcol[i][0];
         pointLight[i]->lightCol.y = ui->pcol[i][1];
-        pointLight[i]->lightCol.z = ui->pcol[i][2];
         pointLight[i]->updateLightColors();
+        pointLight[i]->lightCol.z = ui->pcol[i][2];
+
+        pointLight[i]->lightPos.x = ui->ppos[i][0];
+        pointLight[i]->lightPos.y = ui->ppos[i][1];
+        pointLight[i]->lightPos.z = ui->ppos[i][2];
     }
 
     dirLight->lightCol.x = ui->dircol[0];
@@ -2072,7 +2152,7 @@ void renderScene()
     {
         world_axes->render();
         grid->render();
-    }*/
+    }
 
     static bool set = false;
     if(gc.wireframe)
@@ -2089,19 +2169,27 @@ void renderScene()
         }
     }
 
-    model->render();
-
-/*    if(gc.sphere){
-        sphere->render();
-        light->renderDebugCube();
-    }else{
-        cube->render();
+    if(gc.model)
+    {
+        model->render();
         for (int i = 0; i < 4; i++) 
         {
             pointLight[i]->renderDebugCube();
         }
+    }else{
+        if(gc.sphere){
+            sphere->render();
+            light->renderDebugCube();
+        }else{
+            cube->render();
+            for (int i = 0; i < 4; i++) 
+            {
+                pointLight[i]->renderDebugCube();
+            }
+        }
     }
-*/
+
+
     ui->render();
 }
 
@@ -2114,37 +2202,37 @@ int main(void)
     world_axes  = new Coordinates();
     grid        = new Grid();
 
-    // cube     = new Cube();
-    // sphere   = new Sphere();
+    cube     = new Cube();
+    sphere   = new Sphere();
     model    = new Model("C:\\Users\\zezo_\\Desktop\\Programming\\BasicOpenGL\\assets\\backpack\\backpack.obj");
     // model    = new Model("C:\\Users\\zezo_\\Desktop\\Programming\\BasicOpenGL\\assets\\nanosuit\\nanosuit.obj");
     // model    = new Model("C:\\Users\\zezo_\\Desktop\\Programming\\BasicOpenGL\\assets\\cyborg\\cyborg.obj");
     // model    = new Model("C:\\Users\\zezo_\\Desktop\\Programming\\BasicOpenGL\\assets\\planet\\planet.obj");
 
 
-    // light    = new Light(cube->VBO, cube->EBO);
+    light    = new Light(cube->VBO, cube->EBO);
 
-    // dirLight = new Light(cube->VBO, cube->EBO);
-    // dirLight->lightPos = glm::vec3(-0.2f, -1.0f, -0.3f); 
+    dirLight = new Light(cube->VBO, cube->EBO);
+    dirLight->lightPos = glm::vec3(-0.2f, -1.0f, -0.3f); 
 
-    // glm::vec3 pointLightPositions[] = {
-    //     glm::vec3( 0.7f,  0.2f,  2.0f),
-    //     glm::vec3( 2.3f, -3.3f, -4.0f),
-    //     glm::vec3(-4.0f,  2.0f, -12.0f),
-    //     glm::vec3( 0.0f,  0.0f, -3.0f)
-    // };
+    glm::vec3 pointLightPositions[] = {
+        glm::vec3( 0.7f,  0.2f,  2.0f),
+        glm::vec3( 2.3f, -3.3f, -4.0f),
+        glm::vec3(-4.0f,  2.0f, -12.0f),
+        glm::vec3( 0.0f,  0.0f, -3.0f)
+    };
 
-    // for(size_t i = 0; i < 4 ; i++)
-    // {
-    //     pointLight[i] = new Light(cube->VBO, cube->EBO);
-    //     pointLight[i]->lightPos = pointLightPositions[i];
-    // }
+    for(size_t i = 0; i < 4 ; i++)
+    {
+        pointLight[i] = new Light(cube->VBO, cube->EBO);
+        pointLight[i]->lightPos = pointLightPositions[i];
+    }
 
-    // spotLight  = new Light(cube->VBO, cube->EBO);
+    spotLight  = new Light(cube->VBO, cube->EBO);
 
-    // cube->diffuseMap  = new Texture("..\\assets\\metallic_texture.jpg", "material.diffuse");
-    // cube->specularMap = new Texture("..\\assets\\specular-map.png", "material.specular");
-    // cube->emissionMap = new Texture("..\\assets\\emission-map.jpg", "material.emission");
+    cube->diffuseMap  = new Texture("..\\assets\\metallic_texture.jpg", "material.diffuse");
+    cube->specularMap = new Texture("..\\assets\\specular-map.png", "material.specular");
+    cube->emissionMap = new Texture("..\\assets\\emission-map.jpg", "material.emission");
 
     // Render loop
     while(!glfwWindowShouldClose(gc.window))
