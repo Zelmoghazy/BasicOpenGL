@@ -18,6 +18,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <vector>
 
@@ -50,11 +51,22 @@ struct Color4
     float a;
 };
 
+#define MAX_BONE_INFLUENCE 4
 struct Vertex 
 {
     glm::vec3 Position;
     glm::vec3 Normal;
     glm::vec2 TexCoords;
+
+    // tangent
+    glm::vec3 Tangent;
+    // bitangent
+    glm::vec3 Bitangent;
+
+    //bone indexes which will influence this vertex
+    int m_BoneIDs[MAX_BONE_INFLUENCE];
+    //weights from each bone
+    float m_Weights[MAX_BONE_INFLUENCE];
 };
 
 struct global_context 
@@ -83,46 +95,58 @@ global_context gc;
 struct Texture 
 {
     GLuint id;
+    std::string type;
     std::string path;
     std::string uniform;
-    std::string type;
     int width, height, nrChannels;
 
     Texture(const std::string& texturePath, const std::string& uniform) 
-        : path(texturePath), uniform(uniform), width(0), height(0), nrChannels(0)
+        : uniform(uniform), width(0), height(0), nrChannels(0)
     {
-        (void)textureFromFile();
+        (void)textureFromFile(texturePath);
     }    
 
     Texture(const std::string& texturePath) 
-        : path(texturePath), width(0), height(0), nrChannels(0)
+        : width(0), height(0), nrChannels(0)
     {
-        (void)textureFromFile();
+        (void)textureFromFile(texturePath);
     }
 
-    GLuint textureFromFile()
+    GLuint textureFromFile(const std::string& texturePath)
     {
+        std::cout << "Loading texture from : " << texturePath << std::endl;
+
         // Generate texture ID
         glGenTextures(1, &id);
-        glBindTexture(GL_TEXTURE_2D, id);
-
-        // Set texture wrapping and filtering options
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        // Filtering
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); // scaling down
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); // scaling up
 
         // Load image
         stbi_set_flip_vertically_on_load(true);
-        unsigned char* data = stbi_load(path.c_str(), &width, &height, &nrChannels, 0);
+        unsigned char* data = stbi_load(texturePath.c_str(), &width, &height, &nrChannels, 0);
 
-        if (data) {
-            GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+        if (data) 
+        {
+            GLenum format;
+            switch (nrChannels) {
+                case 1: format = GL_RED; break;
+                case 2: format = GL_RG; break;
+                case 3: format = GL_RGB; break;
+                case 4: format = GL_RGBA; break;
+                default: format = GL_RGB; // Fallback to RGB if unknown
+            }
+            glBindTexture(GL_TEXTURE_2D, id);
             glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
             glGenerateMipmap(GL_TEXTURE_2D);
-        } else {
-            std::cerr << "Failed to load texture: " << path << std::endl;
+
+            // Set texture wrapping and filtering options
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            // Filtering
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); // scaling down
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); // scaling up
+        } 
+        else 
+        {
+            std::cerr << "Failed to load texture: " << texturePath << std::endl;
         }
         stbi_image_free(data);
 
@@ -143,10 +167,10 @@ struct Texture
         GLenum glTextureUnit = GL_TEXTURE0 + textureUnit;
         bind(glTextureUnit);
     }
-    ~Texture() 
-    {
-        glDeleteTextures(1, &id);
-    }
+    // ~Texture() 
+    // {
+    //     glDeleteTextures(1, &id);
+    // }
 };
 
 struct Mesh
@@ -154,9 +178,9 @@ struct Mesh
     GLuint VAO, VBO, EBO;
 
     // mesh data
-    std::vector<Vertex>       vertices;
-    std::vector<GLuint>       indices;
-    std::vector<Texture>      textures;
+    std::vector<Vertex>         vertices;
+    std::vector<unsigned int>   indices;
+    std::vector<Texture>        textures;
 
     Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures)
         : vertices(std::move(vertices))
@@ -175,7 +199,8 @@ struct Mesh
         glBindVertexArray(VAO);
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
 
-        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), &vertices[0], GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), 
+                     &vertices[0], GL_STATIC_DRAW);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
 
@@ -185,12 +210,34 @@ struct Mesh
         // vertex positions
         glEnableVertexAttribArray(0);   
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+
         // vertex normals
         glEnableVertexAttribArray(1);   
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, Normal));
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), 
+                             (void*)offsetof(Vertex, Normal));
+
         // vertex texture coords
         glEnableVertexAttribArray(2);   
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, TexCoords));
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), 
+                             (void*)offsetof(Vertex, TexCoords));
+
+        // vertex tangent
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), 
+                             (void*)offsetof(Vertex, Tangent));
+        // vertex bitangent
+        glEnableVertexAttribArray(4);
+        glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                             (void*)offsetof(Vertex, Bitangent));
+        // ids
+        glEnableVertexAttribArray(5);
+        glVertexAttribIPointer(5, 4, GL_INT, sizeof(Vertex),
+                              (void*)offsetof(Vertex, m_BoneIDs));
+
+        // weights
+        glEnableVertexAttribArray(6);
+        glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), 
+                             (void*)offsetof(Vertex, m_Weights));
 
         glBindVertexArray(0);
     }
@@ -207,17 +254,29 @@ struct Mesh
             // retrieve texture number (the N in diffuse_textureN)
             std::string number;
             std::string name = textures[i].type;
+
             if(name == "texture_diffuse")
                 number = std::to_string(diffuseNr++);
             else if(name == "texture_specular")
                 number = std::to_string(specularNr++);
-
-            textures[i].uniform = ("material." + name + number);
-            textures[i].useTextures(shaderProgram,  i);
+            else if(name == "texture_normal")
+                number = std::to_string(normalNr++);
+             else if(name == "texture_height")
+                number = std::to_string(heightNr++);
+            
+            /* 
+            glActiveTexture(GL_TEXTURE0 + i);
+            glUniform1i(glGetUniformLocation(shaderProgram, (name + number).c_str()), i);
+            glBindTexture(GL_TEXTURE_2D, textures[i].id);
+            */
+            textures[i].uniform = (name + number);
+            textures[i].useTextures(shaderProgram, i);
+            // std::cout << "Binding texture: " << textures[i].type << number << " at unit " << i << " at id : " << textures[i].id << std::endl;
         }
+
         // draw mesh
         glBindVertexArray(VAO);
-        glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
+        glDrawElements(GL_TRIANGLES, (unsigned int)(indices.size()), GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
 
         glActiveTexture(GL_TEXTURE0);
@@ -812,11 +871,10 @@ struct Model
 {
     std::vector<Texture>     textures_loaded;
     std::vector<Mesh>        meshes;
-    std::string              directory;
+    std::string              directory;         // use this to fetch textures an other stuff assuming they are in the same folder
 
     GLuint                   shaderProgram;
     bool                     gammaCorrection;
-
 
     Model(std::string const &path, bool gamma = false) : gammaCorrection(gamma)
     {
@@ -830,20 +888,23 @@ struct Model
 
         // view/projection transformations
         glm::mat4 projection = camera.getProjectionMatrix();
-        glm::mat4 view = camera.getViewMatrix();
+        glm::mat4 view       = camera.getViewMatrix();
+
         setMat4(shaderProgram, "projection", projection);
         setMat4(shaderProgram, "view", view);
 
         // render the loaded model
         glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, glm::vec3(0.0f, 0.0f, 0.0f)); // translate it down so it's at the center of the scene
-        model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f)); // it's a bit too big for our scene, so scale it down
+        model = glm::translate(model, glm::vec3(0.0f, 0.0f, 0.0f)); 
+        model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f));     
         setMat4(shaderProgram, "model", model);
 
         // Just draw all the meshes
-        for(unsigned int i = 0; i < meshes.size(); i++)
+        for(unsigned int i = 0; i < meshes.size(); i++){
             meshes[i].render(shaderProgram);
+        }
     }
+
     void initShaders()
     {
         // Load and compile shaders
@@ -858,12 +919,11 @@ struct Model
         initShaders();
     }
 
-
     void loadModel(std::string const &path)
     {
         // read file
         Assimp::Importer importer;
-        const aiScene *scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
+        const aiScene *scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_GenSmoothNormals| aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
 
         // check errors
         if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) 
@@ -871,19 +931,20 @@ struct Model
             std::cout << "ERROR::ASSIMP::" << importer.GetErrorString() << std::endl;
             return;
         }
+
         // get the directory of the filepath and assuming everything exist there
-        directory = path.substr(0, path.find_last_of('/')); 
+        // directory = path.substr(0, path.find_last_of('\\')); 
+        directory = std::filesystem::path(path).parent_path().string();
 
         // process root node recursively
         processNode(scene->mRootNode, scene);
     }
 
-
     // Process each mesh located at the nodes and all of its children
     void processNode(aiNode *node, const aiScene *scene)
     {
         // process all the node's meshes (if any)
-        for(unsigned int i = 0; i < node->mNumMeshes; i++)
+        for(size_t i = 0; i < node->mNumMeshes; i++)
         {
             aiMesh *mesh = scene->mMeshes[node->mMeshes[i]]; 
             meshes.push_back(processMesh(mesh, scene));         
@@ -898,12 +959,12 @@ struct Model
 
     Mesh processMesh(aiMesh *mesh, const aiScene *scene)
     {
-        std::vector<Vertex>          vertices;
-        std::vector<unsigned int>    indices;
-        std::vector<Texture>         textures;
+        std::vector<Vertex>         vertices;
+        std::vector<unsigned int>   indices;
+        std::vector<Texture>        textures;
 
         // for all mesh vertices
-        for(unsigned int i = 0; i < mesh->mNumVertices; i++)
+        for(size_t i = 0; i < mesh->mNumVertices; i++)
         {
             Vertex vertex;
             glm::vec3 vector; 
@@ -915,7 +976,8 @@ struct Model
             vertex.Position = vector;
 
             // process vertex normals 
-            if(mesh->HasNormals()){
+            if(mesh->HasNormals())
+            {
                 vector.x = mesh->mNormals[i].x;
                 vector.y = mesh->mNormals[i].y;
                 vector.z = mesh->mNormals[i].z;
@@ -932,6 +994,16 @@ struct Model
                 vec.x = mesh->mTextureCoords[0][i].x; 
                 vec.y = mesh->mTextureCoords[0][i].y;
                 vertex.TexCoords = vec;
+                // tangent
+                vector.x = mesh->mTangents[i].x;
+                vector.y = mesh->mTangents[i].y;
+                vector.z = mesh->mTangents[i].z;
+                vertex.Tangent = vector;
+                // bitangent
+                vector.x = mesh->mBitangents[i].x;
+                vector.y = mesh->mBitangents[i].y;
+                vector.z = mesh->mBitangents[i].z;
+                vertex.Bitangent = vector;
             }
             else
             {
@@ -946,9 +1018,11 @@ struct Model
         for(size_t i = 0; i < mesh->mNumFaces; i++)
         {
             aiFace face = mesh->mFaces[i];
+
             // retrieve all face indices
-            for(unsigned int j = 0; j < face.mNumIndices; j++)
+            for(size_t j = 0; j < face.mNumIndices; j++){
                 indices.push_back(face.mIndices[j]);
+            }
         } 
 
         // process material
@@ -971,7 +1045,6 @@ struct Model
         }
 
         return Mesh(vertices, indices, textures);
-
     }
 
     // checks all material textures of a given type and loads the textures if they're not loaded yet.
@@ -979,31 +1052,35 @@ struct Model
     std::vector<Texture> loadMaterialTextures(aiMaterial *mat, aiTextureType type, std::string typeName)
     {
         std::vector<Texture> textures;
-        for(unsigned int i = 0; i < mat->GetTextureCount(type); i++)
+
+        for(size_t i = 0; i < mat->GetTextureCount(type); i++)
         {
             aiString str;
             mat->GetTexture(type, i, &str);
 
+            // check if the texture was loaded before
             bool skip = false;
 
-            for(unsigned int j = 0; j < textures_loaded.size(); j++)
+            for(size_t j = 0; j < textures_loaded.size(); j++)
             {
                 if(std::strcmp(textures_loaded[j].path.data(), str.C_Str()) == 0)
                 {
                     textures.push_back(textures_loaded[j]);
                     skip = true; 
-                    // a texture with the same filepath has already been loaded, continue to next one. (optimization)
+                    // a texture with the same filepath has already been loaded,
+                    // continue to next one. (optimization)
                     break;
                 }
             }
+
             if(!skip)
             {
                 std::string filename = std::string(str.C_Str());
-                filename = directory + '/' + filename;
+                filename = directory + '\\' + filename;
 
                 Texture texture(filename);
                 texture.type = typeName;
-                texture.path = filename;
+                texture.path = std::string(str.C_Str());
                 textures.push_back(texture);
                 textures_loaded.push_back(texture);  // store it as texture loaded for entire model, to ensure we won't unnecessary load duplicate textures.
             }
@@ -1309,7 +1386,6 @@ struct Cube
         axes.render(); 
     }
 };
-
 Cube *cube;
 
 struct Sphere
@@ -1588,7 +1664,6 @@ struct Sphere
         }
     }
 };
-
 Sphere *sphere;
 
 struct Ui
@@ -1726,7 +1801,7 @@ struct Ui
             ImGui::SliderFloat3("lightPos", vec3a, -15.0f, 15.0f);
             ImGui::ColorEdit3("lightCol", col1);
             ImGui::ColorEdit3("dirCol", dircol);
-
+#if 0
             for (int i = 0; i < 4; i++) 
                 ImGui::ColorEdit3(("PointCol" + std::to_string(i)).c_str(), pcol[i]);
 
@@ -1813,6 +1888,7 @@ struct Ui
 
             sprintf_s(str0, "Time: %f ms/frame", gc.deltaTime*1000.0f);
             ImGui::Text(str0);
+#endif
         ImGui::End();
     }
 
@@ -1883,10 +1959,11 @@ void processInput(GLFWwindow *window)
 {
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
     {
-        cube->updateShaders();
-        sphere->updateShaders();
-        light->updateShaders();
-        grid->updateShader();
+        // cube->updateShaders();
+        // sphere->updateShaders();
+        // light->updateShaders();
+        // grid->updateShader();
+        model->updateShaders();
     }
 
     camera.inputPoll(window);
@@ -2037,34 +2114,37 @@ int main(void)
     world_axes  = new Coordinates();
     grid        = new Grid();
 
-    cube     = new Cube();
-    sphere   = new Sphere();
-    model    = new Model("../assets/backpack/backpack.obj");
+    // cube     = new Cube();
+    // sphere   = new Sphere();
+    model    = new Model("C:\\Users\\zezo_\\Desktop\\Programming\\BasicOpenGL\\assets\\backpack\\backpack.obj");
+    // model    = new Model("C:\\Users\\zezo_\\Desktop\\Programming\\BasicOpenGL\\assets\\nanosuit\\nanosuit.obj");
+    // model    = new Model("C:\\Users\\zezo_\\Desktop\\Programming\\BasicOpenGL\\assets\\cyborg\\cyborg.obj");
+    // model    = new Model("C:\\Users\\zezo_\\Desktop\\Programming\\BasicOpenGL\\assets\\planet\\planet.obj");
 
 
-    light    = new Light(cube->VBO, cube->EBO);
+    // light    = new Light(cube->VBO, cube->EBO);
 
-    dirLight = new Light(cube->VBO, cube->EBO);
-    dirLight->lightPos = glm::vec3(-0.2f, -1.0f, -0.3f); 
+    // dirLight = new Light(cube->VBO, cube->EBO);
+    // dirLight->lightPos = glm::vec3(-0.2f, -1.0f, -0.3f); 
 
-    glm::vec3 pointLightPositions[] = {
-        glm::vec3( 0.7f,  0.2f,  2.0f),
-        glm::vec3( 2.3f, -3.3f, -4.0f),
-        glm::vec3(-4.0f,  2.0f, -12.0f),
-        glm::vec3( 0.0f,  0.0f, -3.0f)
-    };
+    // glm::vec3 pointLightPositions[] = {
+    //     glm::vec3( 0.7f,  0.2f,  2.0f),
+    //     glm::vec3( 2.3f, -3.3f, -4.0f),
+    //     glm::vec3(-4.0f,  2.0f, -12.0f),
+    //     glm::vec3( 0.0f,  0.0f, -3.0f)
+    // };
 
-    for(size_t i = 0; i < 4 ; i++)
-    {
-        pointLight[i] = new Light(cube->VBO, cube->EBO);
-        pointLight[i]->lightPos = pointLightPositions[i];
-    }
+    // for(size_t i = 0; i < 4 ; i++)
+    // {
+    //     pointLight[i] = new Light(cube->VBO, cube->EBO);
+    //     pointLight[i]->lightPos = pointLightPositions[i];
+    // }
 
-    spotLight  = new Light(cube->VBO, cube->EBO);
+    // spotLight  = new Light(cube->VBO, cube->EBO);
 
-    cube->diffuseMap  = new Texture("..\\assets\\metallic_texture.jpg", "material.diffuse");
-    cube->specularMap = new Texture("..\\assets\\specular-map.png", "material.specular");
-    cube->emissionMap = new Texture("..\\assets\\emission-map.jpg", "material.emission");
+    // cube->diffuseMap  = new Texture("..\\assets\\metallic_texture.jpg", "material.diffuse");
+    // cube->specularMap = new Texture("..\\assets\\specular-map.png", "material.specular");
+    // cube->emissionMap = new Texture("..\\assets\\emission-map.jpg", "material.emission");
 
     // Render loop
     while(!glfwWindowShouldClose(gc.window))
